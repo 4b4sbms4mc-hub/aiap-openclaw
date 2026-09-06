@@ -1,4 +1,20 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
+
+## AIAP Core Protocol
+
+This repository is a reference adapter for the **AI Avatar Protocol (AIAP)**.
+
+The authoritative AIAP protocol specification, Core Schemas, whitepaper, governance documents, and reference implementation are maintained in the main repository:
+
+https://github.com/4b4sbms4mc-hub/ai-avatar-protocol
+
+**AIAP Core and this OpenClaw adapter are intentionally separated.**
+
+- `ai-avatar-protocol` defines the open interoperability standard.
+- `aiap-openclaw` demonstrates one implementation of that standard for the OpenClaw runtime.
+
+Compatibility with OpenClaw does not make OpenClaw part of the AIAP Core specification.
+
 # AIAP v0.3 for OpenClaw
 
 > **Public Release v0.3.0** — AIAP is intended as an open interoperability standard. Independent open-source and proprietary implementations are permitted under the repository license map. See `OPEN-STANDARD-POLICY.md`, `GOVERNANCE.md`, `LICENSE`, `IP-POLICY.md`, and `TRADEMARK.md`.
