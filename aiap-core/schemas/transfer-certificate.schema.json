@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://spec.aiap.dev/v0.3/schemas/transfer-certificate.schema.json",
+  "title": "AIAP Transfer Certificate v0.3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "certificate_id",
+    "avatar_id",
+    "owner_id",
+    "source",
+    "destination",
+    "issued_at",
+    "expires_at",
+    "nonce",
+    "transfer_scope",
+    "constraints",
+    "proof",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.3"
+    },
+    "certificate_id": {
+      "type": "string",
+      "pattern": "^aiap:transfer:[A-Za-z0-9._~-]{8,128}$"
+    },
+    "avatar_id": {
+      "type": "string",
+      "pattern": "^aiap:avatar:[A-Za-z0-9._~-]{8,128}$"
+    },
+    "owner_id": {
+      "type": "string",
+      "pattern": "^aiap:owner:[A-Za-z0-9._~-]{8,128}$"
+    },
+    "source": {
+      "$ref": "#/$defs/party"
+    },
+    "destination": {
+      "$ref": "#/$defs/party"
+    },
+    "issued_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "nonce": {
+      "type": "string",
+      "minLength": 22,
+      "maxLength": 512
+    },
+    "transfer_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "full",
+            "selective",
+            "copy"
+          ]
+        },
+        "include_profile": {
+          "type": "boolean"
+        },
+        "include_memory": {
+          "type": "boolean"
+        },
+        "include_skills": {
+          "type": "boolean"
+        },
+        "include_workflows": {
+          "type": "boolean"
+        },
+        "include_permissions": {
+          "type": "boolean"
+        },
+        "include_artifacts": {
+          "type": "boolean"
+        }
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "single_use",
+        "max_import_count"
+      ],
+      "properties": {
+        "single_use": {
+          "const": true
+        },
+        "max_import_count": {
+          "const": 1
+        },
+        "require_destination_confirmation": {
+          "type": "boolean"
+        }
+      }
+    },
+    "proof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "key_id",
+        "algorithm",
+        "challenge",
+        "signature"
+      ],
+      "properties": {
+        "type": {
+          "const": "owner-signature"
+        },
+        "key_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "algorithm": {
+          "enum": [
+            "Ed25519",
+            "ES256",
+            "RS256"
+          ]
+        },
+        "challenge": {
+          "type": "string",
+          "minLength": 22,
+          "maxLength": 512
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 40
+        }
+      }
+    },
+    "status": {
+      "enum": [
+        "issued",
+        "consumed",
+        "expired",
+        "revoked"
+      ]
+    }
+  },
+  "$defs": {
+    "party": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "platform_id",
+        "endpoint"
+      ],
+      "properties": {
+        "platform_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "endpoint": {
+          "type": "string",
+          "format": "uri"
+        }
+      }
+    }
+  },
+  "$comment": "SPDX-License-Identifier: Apache-2.0; Copyright 2026 Wang Lu"
+}

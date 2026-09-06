@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://spec.aiap.dev/v0.3/schemas/avatar.schema.json",
+  "title": "AIAP Avatar Manifest v0.3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "avatar_id",
+    "identity",
+    "profile",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.3"
+    },
+    "avatar_id": {
+      "type": "string",
+      "pattern": "^aiap:avatar:[A-Za-z0-9._~-]{8,128}$"
+    },
+    "identity": {
+      "$ref": "identity.schema.json"
+    },
+    "profile": {
+      "$ref": "profile.schema.json"
+    },
+    "memory_index": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "permissions": {
+      "type": "array",
+      "items": {
+        "$ref": "permission.schema.json"
+      }
+    },
+    "status": {
+      "enum": [
+        "active",
+        "suspended",
+        "revoked",
+        "transferred"
+      ]
+    },
+    "extensions": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "$comment": "SPDX-License-Identifier: Apache-2.0; Copyright 2026 Wang Lu"
+}

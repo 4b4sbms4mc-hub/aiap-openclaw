@@ -1,0 +1,45 @@
+{
+  "schema_version": "0.3",
+  "avatar_id": "aiap:avatar:example001",
+  "owner": {
+    "owner_id": "aiap:owner:owner0001",
+    "identity_assurance": "verified",
+    "verification_keys": [
+      {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "kid": "owner-key-01",
+        "status": "active",
+        "created_at": "2026-09-06T12:00:00Z"
+      }
+    ]
+  },
+  "avatar_keys": [
+    {
+      "public_key": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "kid": "avatar-key-01",
+        "status": "active",
+        "created_at": "2026-09-06T12:00:00Z"
+      },
+      "algorithm": "Ed25519",
+      "purpose": [
+        "avatar-authentication",
+        "signing"
+      ]
+    }
+  ],
+  "status": "active",
+  "created_at": "2026-09-06T12:00:00Z",
+  "updated_at": "2026-09-06T12:00:00Z",
+  "recovery": {
+    "methods": [
+      "passkey",
+      "multi_key"
+    ],
+    "threshold": 1
+  }
+}

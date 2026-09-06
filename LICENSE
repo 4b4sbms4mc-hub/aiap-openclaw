@@ -1,0 +1,26 @@
+# AIAP Repository License Map
+
+Copyright 2026 Wang Lu.
+
+This repository contains materials under different open licenses.
+
+## Software, JSON Schemas, examples, SDKs, tests, and reference implementations
+Licensed under the **Apache License 2.0**.
+See `LICENSE-CODE`.
+
+SPDX identifier: `Apache-2.0`
+
+## Whitepapers, protocol specifications, governance documentation, and other prose documentation
+Licensed under **Creative Commons Attribution 4.0 International (CC BY 4.0)** unless a file states otherwise.
+See `LICENSE-SPECIFICATION`.
+
+SPDX identifier: `CC-BY-4.0`
+
+## Names, logos, certification marks, and project identity
+The names **AI Avatar Protocol** and **AIAP**, official logos, and any future certification marks are not licensed as trademarks by the licenses above. See `TRADEMARK.md`.
+
+## No automatic certification or endorsement
+Permission to implement or redistribute AIAP does not mean that an implementation is official, certified, endorsed, or maintained by the AIAP Project.
+
+## Third-party material
+Third-party material, dependencies, standards, and trademarks remain subject to their respective terms.

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "aiap-avatar",
+  "version": "0.3.0",
+  "description": "AI Avatar Protocol v0.3 compatibility bundle for OpenClaw: AIAP identity, ownership, secure transfer, schemas and validation tools.",
+  "author": {
+    "name": "Wang Lu"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "aiap",
+    "ai-avatar",
+    "identity",
+    "ownership",
+    "portable-ai",
+    "openclaw",
+    "mcp"
+  ],
+  "extensions": {
+    "ai.openclaw": {
+      "activation": "manual"
+    },
+    "org.aiap.license": {
+      "spdx": "Apache-2.0",
+      "copyright": "Copyright 2026 Wang Lu"
+    }
+  }
+}

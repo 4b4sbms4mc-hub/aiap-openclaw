@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://spec.aiap.dev/v0.3/schemas/permission.schema.json",
+  "title": "AIAP Permission Grant v0.3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "permission_id",
+    "subject",
+    "action",
+    "effect"
+  ],
+  "properties": {
+    "permission_id": {
+      "type": "string",
+      "pattern": "^aiap:permission:[A-Za-z0-9._~-]{8,128}$"
+    },
+    "subject": {
+      "type": "string",
+      "minLength": 1
+    },
+    "resource": {
+      "type": "string"
+    },
+    "action": {
+      "type": "string",
+      "minLength": 1
+    },
+    "effect": {
+      "enum": [
+        "allow",
+        "deny",
+        "confirm"
+      ]
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "purpose": {
+      "type": "string"
+    },
+    "issued_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "extensions": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "$comment": "SPDX-License-Identifier: Apache-2.0; Copyright 2026 Wang Lu"
+}

@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+import sys, json, os, re
+from pathlib import Path
+from datetime import datetime, timezone
+
+ROOT = Path(os.environ.get("PLUGIN_ROOT", Path(__file__).resolve().parents[1]))
+SCHEMAS = ROOT / "aiap-core" / "schemas"
+
+def result(id_, payload):
+    return {"jsonrpc":"2.0","id":id_,"result":payload}
+
+def error(id_, code, message):
+    return {"jsonrpc":"2.0","id":id_,"error":{"code":code,"message":message}}
+
+def text_content(text, is_error=False):
+    return {"content":[{"type":"text","text":text}],"isError":is_error}
+
+def load_arg(args, name):
+    v=args.get(name)
+    if isinstance(v, dict):
+        return v
+    if isinstance(v, str):
+        return json.loads(v)
+    raise ValueError(f"{name} must be an object or JSON string")
+
+def required(obj, fields):
+    missing=[f for f in fields if f not in obj]
+    if missing:
+        raise ValueError("missing required fields: "+", ".join(missing))
+
+def validate_identity(obj):
+    required(obj, ["schema_version","avatar_id","owner","status"])
+    if obj["schema_version"]!="0.3": raise ValueError("schema_version must be 0.3")
+    if not re.match(r"^aiap:avatar:[A-Za-z0-9._~-]{8,128}$", obj["avatar_id"]): raise ValueError("invalid avatar_id")
+    required(obj["owner"], ["owner_id","identity_assurance","verification_keys"])
+    if obj["owner"]["identity_assurance"] not in ["anonymous","verified","high_assurance"]: raise ValueError("invalid identity_assurance")
+    return True
+
+def validate_transfer(obj):
+    required(obj, ["schema_version","certificate_id","avatar_id","owner_id","source","destination","issued_at","expires_at","nonce","transfer_scope","constraints","proof","status"])
+    if obj["schema_version"]!="0.3": raise ValueError("schema_version must be 0.3")
+    if obj["status"] not in ["issued","consumed","expired","revoked"]: raise ValueError("invalid status")
+    if obj["constraints"].get("single_use") is not True or obj["constraints"].get("max_import_count") != 1:
+        raise ValueError("transfer certificate must be single-use with max_import_count=1")
+    issued=datetime.fromisoformat(obj["issued_at"].replace("Z","+00:00"))
+    expires=datetime.fromisoformat(obj["expires_at"].replace("Z","+00:00"))
+    if expires <= issued: raise ValueError("expires_at must be later than issued_at")
+    required(obj["source"], ["platform_id","endpoint"])
+    required(obj["destination"], ["platform_id","endpoint"])
+    required(obj["proof"], ["type","key_id","algorithm","challenge","signature"])
+    return True
+
+TOOLS=[
+ {"name":"aiap_validate_identity","description":"Validate AIAP v0.3 Identity Record core requirements.",
+  "inputSchema":{"type":"object","properties":{"document":{"description":"Identity object or JSON string"}},"required":["document"]}},
+ {"name":"aiap_validate_transfer","description":"Validate AIAP v0.3 Transfer Certificate core requirements and time ordering.",
+  "inputSchema":{"type":"object","properties":{"document":{"description":"Transfer Certificate object or JSON string"}},"required":["document"]}},
+ {"name":"aiap_inspect_avatar","description":"Inspect an AIAP Avatar manifest and summarize identity, status, capabilities and transfer-relevant fields.",
+  "inputSchema":{"type":"object","properties":{"document":{"description":"Avatar object or JSON string"}},"required":["document"]}}
+]
+
+def call_tool(name,args):
+    try:
+        obj=load_arg(args,"document")
+        if name=="aiap_validate_identity":
+            validate_identity(obj); return text_content("VALID: AIAP v0.3 Identity Record core requirements passed.")
+        if name=="aiap_validate_transfer":
+            validate_transfer(obj); return text_content("VALID: AIAP v0.3 Transfer Certificate core requirements passed.")
+        if name=="aiap_inspect_avatar":
+            required(obj,["schema_version","avatar_id","status"])
+            summary={
+              "schema_version":obj.get("schema_version"),
+              "avatar_id":obj.get("avatar_id"),
+              "status":obj.get("status"),
+              "capabilities":obj.get("capabilities",[]),
+              "permission_count":len(obj.get("permissions",[])),
+              "extension_namespaces":sorted((obj.get("extensions") or {}).keys())
+            }
+            return text_content(json.dumps(summary,ensure_ascii=False,indent=2))
+        return text_content("Unknown tool",True)
+    except Exception as e:
+        return text_content(f"INVALID: {e}",True)
+
+for line in sys.stdin:
+    line=line.strip()
+    if not line: continue
+    try:
+        req=json.loads(line)
+        method=req.get("method"); id_=req.get("id")
+        if method=="initialize":
+            pv=(req.get("params") or {}).get("protocolVersion","2025-06-18")
+            resp=result(id_,{"protocolVersion":pv,"capabilities":{"tools":{}},"serverInfo":{"name":"aiap-openclaw","version":"0.3.0"}})
+        elif method=="notifications/initialized":
+            continue
+        elif method=="tools/list":
+            resp=result(id_,{"tools":TOOLS})
+        elif method=="tools/call":
+            p=req.get("params") or {}
+            resp=result(id_,call_tool(p.get("name"),p.get("arguments") or {}))
+        elif method=="ping":
+            resp=result(id_,{})
+        else:
+            if id_ is None: continue
+            resp=error(id_,-32601,"Method not found")
+        sys.stdout.write(json.dumps(resp,separators=(",",":"))+"\n")
+        sys.stdout.flush()
+    except Exception as e:
+        sys.stdout.write(json.dumps(error(None,-32603,str(e)),separators=(",",":"))+"\n")
+        sys.stdout.flush()

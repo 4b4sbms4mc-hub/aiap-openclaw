@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://spec.aiap.dev/v0.3/schemas/session.schema.json",
+  "title": "AIAP Session v0.3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "session_id",
+    "avatar_id",
+    "started_at",
+    "status"
+  ],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "pattern": "^aiap:session:[A-Za-z0-9._~-]{8,128}$"
+    },
+    "avatar_id": {
+      "type": "string",
+      "pattern": "^aiap:avatar:[A-Za-z0-9._~-]{8,128}$"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "ended_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "enum": [
+        "active",
+        "completed",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "extensions": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "$comment": "SPDX-License-Identifier: Apache-2.0; Copyright 2026 Wang Lu"
+}

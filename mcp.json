@@ -1,0 +1,10 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "aiap-core": {
+      "type": "stdio",
+      "command": "./bin/aiap-mcp",
+      "cwd": "${PLUGIN_ROOT}"
+    }
+  }
+}

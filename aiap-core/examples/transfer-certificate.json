@@ -1,0 +1,39 @@
+{
+  "schema_version": "0.3",
+  "certificate_id": "aiap:transfer:transfer001",
+  "avatar_id": "aiap:avatar:example001",
+  "owner_id": "aiap:owner:owner0001",
+  "source": {
+    "platform_id": "source.example",
+    "endpoint": "https://source.example/aiap"
+  },
+  "destination": {
+    "platform_id": "destination.example",
+    "endpoint": "https://destination.example/aiap"
+  },
+  "issued_at": "2026-09-06T12:00:00Z",
+  "expires_at": "2026-09-06T12:10:00Z",
+  "nonce": "0123456789abcdefghijklmnop",
+  "transfer_scope": {
+    "mode": "selective",
+    "include_profile": true,
+    "include_memory": true,
+    "include_skills": true,
+    "include_workflows": true,
+    "include_permissions": false,
+    "include_artifacts": false
+  },
+  "constraints": {
+    "single_use": true,
+    "max_import_count": 1,
+    "require_destination_confirmation": true
+  },
+  "proof": {
+    "type": "owner-signature",
+    "key_id": "owner-key-01",
+    "algorithm": "Ed25519",
+    "challenge": "abcdefghijklmnopqrstuvwxyz012345",
+    "signature": "BASE64URL_SIGNATURE_PLACEHOLDER_012345678901234567890"
+  },
+  "status": "issued"
+}

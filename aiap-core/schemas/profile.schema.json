@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://spec.aiap.dev/v0.3/schemas/profile.schema.json",
+  "title": "AIAP Profile v0.3",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "display_name": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "preferred_language": {
+      "type": "string",
+      "maxLength": 35
+    },
+    "timezone": {
+      "type": "string",
+      "maxLength": 100
+    },
+    "preferences": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "roles": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 100
+      },
+      "uniqueItems": true
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "extensions": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "$comment": "SPDX-License-Identifier: Apache-2.0; Copyright 2026 Wang Lu"
+}
