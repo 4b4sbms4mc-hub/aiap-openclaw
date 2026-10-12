@@ -1,0 +1,12 @@
+{
+  "author": "Wang Lu",
+  "core_source": "LaVida_Auto_0.3.4/test-core-0.2.0",
+  "core_version": "0.2.0",
+  "plugin_source": "LaVida_Auto_0.3.4/plugin",
+  "plugin_version": "0.3.4",
+  "functional_source_changes": false,
+  "fresh_install_packaging_changed": true,
+  "public_status": "experimental-prerelease",
+  "license_metadata_changed": true,
+  "repository": "4b4sbms4mc-hub/aiap-openclaw"
+}
