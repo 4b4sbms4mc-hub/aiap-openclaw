@@ -13,7 +13,7 @@ docker compose up -d
 docker compose exec core python -m aiap_core session --credential-file /data/owner-credentials.json
 ```
 
-首次 init 产生新的本地 Avatar 与私有凭证；重复 init 拒绝覆盖。项目名 aiap-mvp，命名卷 aiap-mvp_core-data；宿主端口 127.0.0.1:8043。服务容器内端口仍为 8042。宿主无权用户不能读取私钥的保证取决于主机部署；此版本不防御主机管理员。
+首次 init 产生新的本地 Avatar 与私有凭证；重复 init 拒绝覆盖。项目名 aiap-mvp，命名卷 aiap-mvp_core-data；Core 只连接内部网络，不发布宿主端口。Owner 管理命令通过 docker compose exec 执行；OpenClaw 加入同一内部网络后访问 aiap-mvp-core:8042。宿主无权用户不能读取私钥的保证取决于主机部署；此版本不防御主机管理员。
 
 ## 2. 独立验证提案与确认
 
