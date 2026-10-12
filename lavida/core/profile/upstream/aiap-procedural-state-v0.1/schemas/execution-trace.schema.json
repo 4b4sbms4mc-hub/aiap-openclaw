@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiap.dev/schema/v0.1/execution-trace.schema.json",
+  "title": "AIAP ExecutionTrace v0.1",
+  "description": "Auditable task/action/result summary; MUST NOT require private chain-of-thought.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "trace_id",
+    "avatar_id",
+    "workflow_id",
+    "runtime_id",
+    "started_at",
+    "status",
+    "steps"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1"
+    },
+    "trace_id": {
+      "type": "string",
+      "pattern": "^aiap:trace:[A-Za-z0-9._:-]+$"
+    },
+    "avatar_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workflow_id": {
+      "type": "string",
+      "pattern": "^aiap:workflow:[A-Za-z0-9._:-]+$"
+    },
+    "workflow_version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "runtime_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "ended_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "status": {
+      "enum": [
+        "running",
+        "succeeded",
+        "failed",
+        "partial",
+        "cancelled"
+      ]
+    },
+    "intent_summary": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "step_id",
+          "capability_id",
+          "status"
+        ],
+        "properties": {
+          "step_id": {
+            "type": "string"
+          },
+          "capability_id": {
+            "type": "string",
+            "pattern": "^aiap:capability:[A-Za-z0-9._:-]+$"
+          },
+          "binding_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "implementation_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "running",
+              "succeeded",
+              "failed",
+              "skipped",
+              "partial"
+            ]
+          },
+          "input_summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "output_summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "result_summary": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "user_feedback": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "state_updates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "extensions": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}
