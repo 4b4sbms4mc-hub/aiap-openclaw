@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: Apache-2.0
+name: La Vida validation and release
+on:
+  pull_request:
+    paths: ["lavida/**", "scripts/**", ".github/workflows/lavida-release.yml"]
+  push:
+    branches: [main]
+    paths: ["lavida/RELEASE.json", ".github/workflows/lavida-release.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: lavida-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+      - name: Install Python dependencies
+        run: python -m pip install -r lavida/core/requirements.txt
+      - name: Core tests (66)
+        working-directory: lavida/core
+        run: python -m unittest discover -s tests -v
+      - name: Plugin HTTP integration (15)
+        working-directory: lavida
+        env:
+          PYTHONPATH: core
+        run: node plugin-tests/integration.mjs
+      - name: Automatic-candidate regression (15)
+        working-directory: lavida
+        env:
+          PYTHONPATH: core
+        run: node plugin-tests/automatic.mjs
+      - name: Build and initialize fresh Core Docker fixture
+        run: |
+          docker compose -f lavida/compose.yaml build
+          docker compose -f lavida/compose.yaml run --rm core init
+          docker compose -f lavida/compose.yaml up -d
+      - name: Verify fresh approval/recall and restart persistence
+        run: python scripts/check_fresh_core.py
+      - name: Remove synthetic CI containers and volume
+        if: always()
+        run: docker compose -f lavida/compose.yaml down -v
+  release:
+    needs: checks
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Package validated source
+        run: python scripts/package_lavida.py --ci
+      - name: Publish prerelease with verified download assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/publish_lavida_release.py
