@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.aiap.invalid/core-profile/0.1-draft/profile-manifest.schema.json",
+  "title": "AIAP Core Profile draft — profile-manifest",
+  "type": "object",
+  "properties": {
+    "profile_id": {
+      "const": "x-aiap-core-profile"
+    },
+    "profile_version": {
+      "const": "0.1-draft"
+    },
+    "whitepaper_version": {
+      "const": "0.4.2"
+    },
+    "avatar_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "state_ref": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "core_ref": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "bundle_ref": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "required_extensions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "namespace": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "critical": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "namespace",
+          "version",
+          "critical"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "profile_id",
+    "profile_version",
+    "whitepaper_version",
+    "avatar_id",
+    "state_ref",
+    "core_ref",
+    "bundle_ref",
+    "required_extensions"
+  ],
+  "additionalProperties": false
+}

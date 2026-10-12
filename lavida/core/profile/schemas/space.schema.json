@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.aiap.invalid/core-profile/0.1-draft/space.schema.json",
+  "title": "AIAP Core Profile draft — space",
+  "type": "object",
+  "properties": {
+    "space_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "previous_revision": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "kind": {
+      "enum": [
+        "personal-general",
+        "personal-life",
+        "personal-work",
+        "family-shared",
+        "organization",
+        "department",
+        "project"
+      ]
+    },
+    "controller_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parent_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "policy_ref": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "key_scope_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "enum": [
+        "active",
+        "revoked"
+      ]
+    }
+  },
+  "required": [
+    "space_id",
+    "revision",
+    "previous_revision",
+    "kind",
+    "controller_ref",
+    "parent_ref",
+    "policy_ref",
+    "key_scope_ref",
+    "status"
+  ],
+  "additionalProperties": false
+}

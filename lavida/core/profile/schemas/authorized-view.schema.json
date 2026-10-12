@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.aiap.invalid/core-profile/0.1-draft/authorized-view.schema.json",
+  "title": "AIAP Core Profile draft — authorized-view",
+  "type": "object",
+  "properties": {
+    "view_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "request_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "avatar_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "subject_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runtime_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "purpose": {
+      "type": "string",
+      "minLength": 1
+    },
+    "space_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "$ref": "object-reference.schema.json"
+      },
+      "minItems": 0,
+      "uniqueItems": true
+    },
+    "policy_versions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "id",
+          "version"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "revocation_epoch": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "compiled_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "view_id",
+    "request_ref",
+    "avatar_id",
+    "subject_ref",
+    "session_ref",
+    "runtime_ref",
+    "purpose",
+    "space_refs",
+    "objects",
+    "policy_versions",
+    "revocation_epoch",
+    "compiled_at",
+    "expires_at"
+  ],
+  "additionalProperties": false
+}
