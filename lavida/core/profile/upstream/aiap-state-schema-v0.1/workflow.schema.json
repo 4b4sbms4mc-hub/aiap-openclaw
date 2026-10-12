@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiap.dev/schema/v0.1/workflow.schema.json",
+  "title": "AIAP Workflow Profile Domain v0.1",
+  "type": "object",
+  "required": [
+    "domain_id",
+    "version",
+    "data"
+  ],
+  "properties": {
+    "domain_id": {
+      "const": "aiap.workflows"
+    },
+    "version": {
+      "const": "0.1"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "items"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "workflow_id",
+              "name",
+              "origin",
+              "status",
+              "steps"
+            ],
+            "properties": {
+              "workflow_id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              },
+              "origin": {
+                "type": "string",
+                "enum": [
+                  "user-defined",
+                  "imported",
+                  "application-defined",
+                  "learned"
+                ]
+              },
+              "status": {
+                "$ref": "common.schema.json#/$defs/lifecycleStatus"
+              },
+              "trigger": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "action": {
+                      "type": "string"
+                    },
+                    "skill": {
+                      "type": "string"
+                    },
+                    "workflow_ref": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              },
+              "usage": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "permission_refs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "extensions": {
+                "$ref": "common.schema.json#/$defs/extensionBag"
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "extensions": {
+      "$ref": "common.schema.json#/$defs/extensionBag"
+    }
+  },
+  "additionalProperties": true
+}

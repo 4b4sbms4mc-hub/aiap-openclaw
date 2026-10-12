@@ -1,0 +1,42 @@
+{
+  "author": "Wang Lu",
+  "sources": [
+    {
+      "file": "01-AIAP_Whitepaper_v0.4.2_CN.docx",
+      "sha256": "56c98ee82baee194fbb49b09858ea6c0e387440cc857e6e968bdae8f5eea6307"
+    },
+    {
+      "file": "02-AIAP_Procedural_State_and_Capability_Architecture_v0.1_CN-1-.docx",
+      "sha256": "d6f0abab4efcc4a37e878f1e99b6514ad58585b38f77f623c2ca2b4ce6d00b2b"
+    },
+    {
+      "file": "03-AIAP_Whitepaper_v0.4_CN-1-.docx",
+      "sha256": "1e3f26ba8b83d2439a7543891edc5bf2dad37b273e76d49a3f902727f6399452"
+    },
+    {
+      "file": "04-AIAP_Whitepaper_v0.4.2_CN-1-.docx",
+      "sha256": "56c98ee82baee194fbb49b09858ea6c0e387440cc857e6e968bdae8f5eea6307"
+    },
+    {
+      "file": "05-AIAP_Whitepaper_v0.4.1_CN-1-.docx",
+      "sha256": "dc8ce3da6bf095a684d8a20090cc13e115aaf4286110699dff1bbe546409f431"
+    },
+    {
+      "file": "06-AIAP_Runtime_Adapter_Protocol_v0.1-1-.zip",
+      "sha256": "21db774f34f3d7486ab7651fb0a9454a571b82ad3a7742c091d92fd037186019"
+    },
+    {
+      "file": "07-AIAP_Procedural_State_Schemas_v0.1-1-.zip",
+      "sha256": "857ab8a898976beb60f8642d656be42d17ba936ca366367f6649eb0e5e664458"
+    },
+    {
+      "file": "08-AIAP_STATE_SCHEMA_v0.1-1-.zip",
+      "sha256": "b5bdea98f9fc1455bc96b0be118c3b6a42365a222945176c1f09bb88fb5ccabd"
+    },
+    {
+      "file": "09-AIAP_State_Model_v0.1_CN-1-.docx",
+      "sha256": "1bb35244f09c02f2b3906d31717f0f43653901aff7dc3ddedcafde3072cb496c"
+    }
+  ],
+  "note": "Upstream ZIP entries copied unchanged. Source documents are identified by hash; not republished in this package."
+}

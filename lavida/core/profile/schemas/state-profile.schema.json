@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.aiap.invalid/core-profile/0.1-draft/state-profile.schema.json",
+  "title": "AIAP Core Profile draft — state-profile",
+  "allOf": [
+    {
+      "$ref": "https://aiap.dev/schema/v0.1/aiap-state.schema.json"
+    },
+    {
+      "type": "object",
+      "required": [
+        "extensions"
+      ],
+      "properties": {
+        "extensions": {
+          "required": [
+            "x-aiap-core-profile"
+          ],
+          "properties": {
+            "x-aiap-core-profile": {
+              "$ref": "profile-manifest.schema.json"
+            }
+          }
+        },
+        "domains": {
+          "properties": {
+            "aiap.memory": {
+              "properties": {
+                "data": {
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "memory-record.schema.json"
+                      },
+                      "minItems": 0,
+                      "uniqueItems": true
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiap.dev/schema/v0.1/runtime-context.schema.json",
+  "title": "AIAP RuntimeContext v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "context_id",
+    "avatar_id",
+    "purpose",
+    "state_slices",
+    "compiled_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1"
+    },
+    "context_id": {
+      "type": "string",
+      "pattern": "^aiap:context:[A-Za-z0-9._:-]+$"
+    },
+    "avatar_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "purpose": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workflow_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "state_slices": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "domain",
+          "content"
+        ],
+        "properties": {
+          "domain": {
+            "type": "string",
+            "minLength": 1
+          },
+          "content": {},
+          "source_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "disclosure_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "compiled_prompt": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "attachments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "token_budget": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "compiled_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "extensions": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+      },
+      "additionalProperties": true
+    }
+  }
+}

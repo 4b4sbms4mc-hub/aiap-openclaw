@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.aiap.invalid/core-profile/0.1-draft/scoped-transfer-certificate.schema.json",
+  "title": "AIAP Core Profile draft — scoped-transfer-certificate",
+  "type": "object",
+  "properties": {
+    "payload": {
+      "type": "object",
+      "properties": {
+        "certificate_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "profile_version": {
+          "const": "0.1-draft"
+        },
+        "source_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "destination_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "owner_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "avatar_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "space_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "mode": {
+          "enum": [
+            "backup-copy",
+            "runtime-move",
+            "ownership-transfer"
+          ]
+        },
+        "nonce": {
+          "type": "string",
+          "minLength": 32
+        },
+        "issued_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "manifest_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "authorization_refs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "version": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "id",
+              "version"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "required_extensions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "namespace": {
+                "type": "string",
+                "minLength": 1
+              },
+              "version": {
+                "type": "string",
+                "minLength": 1
+              },
+              "critical": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "namespace",
+              "version",
+              "critical"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "certificate_id",
+        "profile_version",
+        "source_ref",
+        "destination_ref",
+        "owner_refs",
+        "avatar_ids",
+        "space_refs",
+        "mode",
+        "nonce",
+        "issued_at",
+        "expires_at",
+        "manifest_sha256",
+        "authorization_refs",
+        "required_extensions"
+      ],
+      "additionalProperties": false
+    },
+    "proofs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "crypto_profile": {
+            "type": "string",
+            "minLength": 1
+          },
+          "key_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "signature": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$"
+          }
+        },
+        "required": [
+          "crypto_profile",
+          "key_ref",
+          "signature"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "payload",
+    "proofs"
+  ],
+  "additionalProperties": false
+}

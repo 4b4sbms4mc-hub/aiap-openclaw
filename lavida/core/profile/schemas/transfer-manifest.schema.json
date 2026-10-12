@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.aiap.invalid/core-profile/0.1-draft/transfer-manifest.schema.json",
+  "title": "AIAP Core Profile draft — transfer-manifest",
+  "type": "object",
+  "properties": {
+    "manifest_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "previous_revision": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "mode": {
+      "enum": [
+        "backup-copy",
+        "runtime-move",
+        "ownership-transfer"
+      ]
+    },
+    "avatar_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "space_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "$ref": "object-reference.schema.json"
+          },
+          "disposition": {
+            "enum": [
+              "included",
+              "reference-only",
+              "excluded",
+              "unresolved"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "object",
+          "disposition",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "restore_guarantee": {
+      "enum": [
+        "references-portable",
+        "offline-complete"
+      ]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "manifest_id",
+    "revision",
+    "previous_revision",
+    "mode",
+    "avatar_ids",
+    "space_refs",
+    "entries",
+    "restore_guarantee",
+    "created_at"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.aiap.invalid/core-profile/0.1-draft/membership.schema.json",
+  "title": "AIAP Core Profile draft — membership",
+  "type": "object",
+  "properties": {
+    "membership_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "previous_revision": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "subject_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "space_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "roles": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "valid_from": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "enum": [
+        "active",
+        "revoked"
+      ]
+    },
+    "authorization_ref": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "membership_id",
+    "revision",
+    "previous_revision",
+    "subject_ref",
+    "space_ref",
+    "roles",
+    "valid_from",
+    "expires_at",
+    "status",
+    "authorization_ref"
+  ],
+  "additionalProperties": false
+}

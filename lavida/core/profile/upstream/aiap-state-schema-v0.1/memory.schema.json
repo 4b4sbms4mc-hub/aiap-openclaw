@@ -1,0 +1,301 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiap.dev/schema/v0.1/memory.schema.json",
+  "title": "AIAP Memory Domain v0.1",
+  "description": "Portable memory records plus runtime-neutral promotion/demotion policy.",
+  "type": "object",
+  "required": [
+    "domain_id",
+    "version",
+    "data"
+  ],
+  "properties": {
+    "domain_id": {
+      "const": "aiap.memory"
+    },
+    "version": {
+      "const": "0.1"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "policy",
+        "items"
+      ],
+      "properties": {
+        "policy": {
+          "type": "object",
+          "required": [
+            "automatic_demotion",
+            "default_rules"
+          ],
+          "properties": {
+            "automatic_demotion": {
+              "type": "boolean",
+              "default": true
+            },
+            "review_interval_hours": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 24
+            },
+            "clock_basis": {
+              "type": "string",
+              "enum": [
+                "last_accessed_at",
+                "last_reinforced_at",
+                "max_of_access_and_reinforcement"
+              ],
+              "default": "max_of_access_and_reinforcement"
+            },
+            "never_auto_delete": {
+              "type": "boolean",
+              "default": true
+            },
+            "reactivation_enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "default_rules": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": [
+                  "from_level",
+                  "inactive_after_days",
+                  "action"
+                ],
+                "properties": {
+                  "from_level": {
+                    "type": "string",
+                    "enum": [
+                      "M0",
+                      "M1",
+                      "M2",
+                      "M3"
+                    ]
+                  },
+                  "inactive_after_days": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "demote-to-M1",
+                      "archive-to-M3",
+                      "expire-ephemeral",
+                      "none"
+                    ]
+                  },
+                  "min_importance": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "require_not_pinned": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": true
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "memory_id",
+              "level",
+              "type",
+              "content",
+              "source",
+              "status",
+              "retention",
+              "created_at"
+            ],
+            "properties": {
+              "memory_id": {
+                "type": "string"
+              },
+              "level": {
+                "type": "string",
+                "enum": [
+                  "M0",
+                  "M1",
+                  "M2",
+                  "M3"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "preference-evidence",
+                  "decision",
+                  "event",
+                  "relationship",
+                  "project-context",
+                  "workflow-evidence",
+                  "summary",
+                  "other"
+                ]
+              },
+              "content": {},
+              "source": {
+                "$ref": "common.schema.json#/$defs/provenance"
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "importance": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "recall_count": {
+                "type": "integer",
+                "minimum": 0,
+                "default": 0
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updated_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "last_accessed_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              },
+              "last_reinforced_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              },
+              "status": {
+                "$ref": "common.schema.json#/$defs/lifecycleStatus"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "uniqueItems": true
+              },
+              "retention": {
+                "type": "object",
+                "required": [
+                  "pinned",
+                  "decay_exempt"
+                ],
+                "properties": {
+                  "pinned": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "decay_exempt": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "minimum_level": {
+                    "type": "string",
+                    "enum": [
+                      "M0",
+                      "M1",
+                      "M2",
+                      "M3"
+                    ]
+                  },
+                  "inactive_after_days_override": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 1
+                  },
+                  "next_review_at": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time"
+                  },
+                  "demotion_count": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0
+                  },
+                  "last_transition": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "properties": {
+                      "from": {
+                        "type": "string",
+                        "enum": [
+                          "M0",
+                          "M1",
+                          "M2",
+                          "M3"
+                        ]
+                      },
+                      "to": {
+                        "type": "string",
+                        "enum": [
+                          "M0",
+                          "M1",
+                          "M2",
+                          "M3"
+                        ]
+                      },
+                      "reason": {
+                        "type": "string"
+                      },
+                      "at": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    },
+                    "required": [
+                      "from",
+                      "to",
+                      "reason",
+                      "at"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": true
+              },
+              "extensions": {
+                "$ref": "common.schema.json#/$defs/extensionBag"
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "extensions": {
+      "$ref": "common.schema.json#/$defs/extensionBag"
+    }
+  },
+  "additionalProperties": true
+}

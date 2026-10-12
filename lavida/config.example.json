@@ -1,0 +1,30 @@
+{
+  "plugins": {
+    "slots": {
+      "memory": "lavida-aiap"
+    },
+    "entries": {
+      "lavida-aiap": {
+        "enabled": true,
+        "config": {
+          "baseUrl": "http://aiap-mvp-core:8042",
+          "avatarId": "REPLACE_WITH_INITIALIZED_AVATAR_ID",
+          "autoPropose": {
+            "enabled": false
+          },
+          "bindings": {
+            "main": {
+              "spaceRef": "space:general",
+              "credentialFile": "/home/node/.openclaw/lavida-credentials/main.json",
+              "purpose": "lavida-memory",
+              "runtimeRef": "openclaw-main",
+              "sessionKeys": [
+                "agent:main:main"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

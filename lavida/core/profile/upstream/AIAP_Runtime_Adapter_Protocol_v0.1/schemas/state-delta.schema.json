@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiap.dev/schema/v0.1/state-delta.schema.json",
+  "title": "AIAP StateDelta v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "delta_id",
+    "avatar_id",
+    "runtime_id",
+    "created_at",
+    "changes",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1"
+    },
+    "delta_id": {
+      "type": "string",
+      "pattern": "^aiap:state-delta:[A-Za-z0-9._:-]+$"
+    },
+    "avatar_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runtime_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trace_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "changes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "change_id",
+          "domain",
+          "operation",
+          "candidate",
+          "confidence",
+          "evidence"
+        ],
+        "properties": {
+          "change_id": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "add",
+              "update",
+              "deprecate",
+              "observe"
+            ]
+          },
+          "candidate": {},
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "requires_user_confirmation": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      }
+    },
+    "status": {
+      "enum": [
+        "proposed",
+        "validated",
+        "accepted",
+        "rejected",
+        "partially_accepted"
+      ]
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "extensions": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+      },
+      "additionalProperties": true
+    }
+  }
+}

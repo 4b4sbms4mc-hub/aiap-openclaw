@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.aiap.invalid/core-profile/0.1-draft/tombstone.schema.json",
+  "title": "AIAP Core Profile draft — tombstone",
+  "type": "object",
+  "properties": {
+    "object_ref": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "owner_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "space_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "policy_ref": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "version": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "id",
+            "version"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "owner_ref",
+        "space_ref",
+        "policy_ref"
+      ],
+      "additionalProperties": false
+    },
+    "deleted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "authorization_ref": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "purge_status": {
+      "enum": [
+        "pending",
+        "controlled-copies-purged",
+        "backup-expiry-pending"
+      ]
+    },
+    "supersedes_through_revision": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "required": [
+    "object_ref",
+    "scope",
+    "deleted_at",
+    "authorization_ref",
+    "purge_status",
+    "supersedes_through_revision"
+  ],
+  "additionalProperties": false
+}

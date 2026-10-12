@@ -1,0 +1,132 @@
+{
+  "aiap_version": "0.1",
+  "state_id": "aiap-state:8a807be2-99aa-42f4-9561-2ac4d25c1001",
+  "owner_id": "aiap-id:wang-lu-demo",
+  "created_at": "2026-09-12T09:00:00Z",
+  "updated_at": "2026-09-12T09:00:00Z",
+  "domains": {
+    "aiap.identity": {
+      "domain_id": "aiap.identity",
+      "version": "0.1",
+      "data": {
+        "identity_id": "aiap-id:wang-lu-demo",
+        "owner_id": "aiap-id:wang-lu-demo",
+        "type": "person",
+        "display_name": "Wang Lu",
+        "created_at": "2026-09-12T09:00:00Z"
+      }
+    },
+    "aiap.preferences": {
+      "domain_id": "aiap.preferences",
+      "version": "0.1",
+      "data": {
+        "items": []
+      }
+    },
+    "aiap.memory": {
+      "domain_id": "aiap.memory",
+      "version": "0.1",
+      "data": {
+        "policy": {
+          "automatic_demotion": true,
+          "review_interval_hours": 24,
+          "clock_basis": "max_of_access_and_reinforcement",
+          "never_auto_delete": true,
+          "reactivation_enabled": true,
+          "default_rules": [
+            {
+              "from_level": "M0",
+              "inactive_after_days": 2,
+              "action": "expire-ephemeral",
+              "require_not_pinned": true
+            },
+            {
+              "from_level": "M1",
+              "inactive_after_days": 30,
+              "action": "archive-to-M3",
+              "require_not_pinned": true
+            },
+            {
+              "from_level": "M2",
+              "inactive_after_days": 180,
+              "action": "archive-to-M3",
+              "require_not_pinned": true
+            },
+            {
+              "from_level": "M3",
+              "inactive_after_days": 3650,
+              "action": "none",
+              "require_not_pinned": true
+            }
+          ]
+        },
+        "items": [
+          {
+            "memory_id": "mem:aiap-project",
+            "level": "M2",
+            "type": "project-context",
+            "content": "The user is developing AIAP as a person-centric portable personal AI state protocol.",
+            "source": {
+              "source_type": "explicit-user",
+              "trust_level": "owner-verified",
+              "verified": true
+            },
+            "confidence": 1.0,
+            "importance": 0.95,
+            "recall_count": 12,
+            "created_at": "2026-09-03T00:00:00Z",
+            "updated_at": "2026-09-12T09:00:00Z",
+            "last_accessed_at": "2026-09-12T09:00:00Z",
+            "last_reinforced_at": "2026-09-12T09:00:00Z",
+            "status": "active",
+            "tags": [
+              "AIAP",
+              "project"
+            ],
+            "retention": {
+              "pinned": false,
+              "decay_exempt": false,
+              "minimum_level": "M3",
+              "demotion_count": 0,
+              "next_review_at": "2026-09-13T09:00:00Z",
+              "last_transition": null
+            }
+          }
+        ]
+      }
+    },
+    "aiap.skills": {
+      "domain_id": "aiap.skills",
+      "version": "0.1",
+      "data": {
+        "items": []
+      }
+    },
+    "aiap.workflows": {
+      "domain_id": "aiap.workflows",
+      "version": "0.1",
+      "data": {
+        "items": []
+      }
+    },
+    "aiap.permissions": {
+      "domain_id": "aiap.permissions",
+      "version": "0.1",
+      "data": {
+        "items": []
+      }
+    },
+    "org.example.research-state": {
+      "domain_id": "org.example.research-state",
+      "schema_uri": "https://example.org/aiap/research-state.schema.json",
+      "version": "1.0",
+      "status": "active",
+      "data": {
+        "active_papers": []
+      }
+    }
+  },
+  "metadata": {
+    "schema_profile": "AIAP-State-v0.1"
+  }
+}

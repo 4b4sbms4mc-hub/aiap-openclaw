@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.aiap.invalid/core-profile/0.1-draft/avatar-core.schema.json",
+  "title": "AIAP Core Profile draft — avatar-core",
+  "type": "object",
+  "properties": {
+    "aiap_version": {
+      "const": "0.4.2"
+    },
+    "profile_version": {
+      "const": "0.1-draft"
+    },
+    "avatar_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "owner": {
+      "type": "object",
+      "properties": {
+        "owner_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "owner_key_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "avatar_key_ref": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "owner_ref",
+        "owner_key_ref",
+        "avatar_key_ref"
+      ],
+      "additionalProperties": false
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "previous_revision": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "identity_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "profile_summary": {
+      "type": "array",
+      "items": {
+        "$ref": "object-reference.schema.json"
+      },
+      "minItems": 0,
+      "uniqueItems": true
+    },
+    "state_index": {
+      "type": "array",
+      "items": {
+        "$ref": "object-reference.schema.json"
+      },
+      "minItems": 0,
+      "uniqueItems": true
+    },
+    "procedural_index": {
+      "type": "array",
+      "items": {
+        "$ref": "object-reference.schema.json"
+      },
+      "minItems": 0,
+      "uniqueItems": true
+    },
+    "extensions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "namespace": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "critical": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "namespace",
+          "version",
+          "critical"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "integrity": {
+      "type": "object",
+      "properties": {
+        "manifest_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "proofs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "crypto_profile": {
+                "type": "string",
+                "minLength": 1
+              },
+              "key_ref": {
+                "type": "string",
+                "minLength": 1
+              },
+              "signature": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]+$"
+              }
+            },
+            "required": [
+              "crypto_profile",
+              "key_ref",
+              "signature"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "manifest_sha256",
+        "proofs"
+      ],
+      "additionalProperties": false
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "aiap_version",
+    "profile_version",
+    "avatar_id",
+    "owner",
+    "revision",
+    "previous_revision",
+    "identity_refs",
+    "profile_summary",
+    "state_index",
+    "procedural_index",
+    "extensions",
+    "integrity",
+    "updated_at"
+  ],
+  "additionalProperties": false
+}

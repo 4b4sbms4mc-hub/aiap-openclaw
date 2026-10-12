@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiap.dev/schema/v0.1/aiap-state.schema.json",
+  "title": "AIAP State Schema v0.1",
+  "description": "Extensible, person-centric portable AI state container.",
+  "type": "object",
+  "required": [
+    "aiap_version",
+    "state_id",
+    "owner_id",
+    "created_at",
+    "updated_at",
+    "domains"
+  ],
+  "properties": {
+    "aiap_version": {
+      "const": "0.1"
+    },
+    "state_id": {
+      "type": "string",
+      "pattern": "^aiap-state:"
+    },
+    "owner_id": {
+      "type": "string",
+      "pattern": "^aiap-id:"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "domains": {
+      "type": "object",
+      "description": "Core domains plus namespaced extension domains. New domains do not require modification of the root schema.",
+      "required": [
+        "aiap.identity",
+        "aiap.preferences",
+        "aiap.memory",
+        "aiap.skills",
+        "aiap.workflows",
+        "aiap.permissions"
+      ],
+      "properties": {
+        "aiap.identity": {
+          "$ref": "identity.schema.json"
+        },
+        "aiap.preferences": {
+          "$ref": "preferences.schema.json"
+        },
+        "aiap.memory": {
+          "$ref": "memory.schema.json"
+        },
+        "aiap.skills": {
+          "$ref": "skill.schema.json"
+        },
+        "aiap.workflows": {
+          "$ref": "workflow.schema.json"
+        },
+        "aiap.permissions": {
+          "$ref": "permission.schema.json"
+        }
+      },
+      "patternProperties": {
+        "^(x-[A-Za-z0-9._-]+|[a-z0-9]+(?:\\.[a-z0-9-]+){2,})$": {
+          "$ref": "common.schema.json#/$defs/genericDomain"
+        }
+      },
+      "additionalProperties": false
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "extensions": {
+      "$ref": "common.schema.json#/$defs/extensionBag"
+    }
+  },
+  "additionalProperties": false
+}

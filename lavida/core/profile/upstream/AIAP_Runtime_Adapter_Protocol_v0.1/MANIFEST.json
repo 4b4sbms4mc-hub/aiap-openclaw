@@ -1,0 +1,47 @@
+{
+  "package": "AIAP Runtime Adapter Protocol",
+  "version": "0.1",
+  "author": "Wang Lu",
+  "files": [
+    {
+      "path": "INTERFACE-CONTRACT.md",
+      "sha256": "1af0463a40cffddd5a356d95b786d464a5209d6cc33dd3768b9579a5854a79c6"
+    },
+    {
+      "path": "README.md",
+      "sha256": "4d49a676519eaca8791d13a599e75614db63907d2524fe241cbd578b74af8866"
+    },
+    {
+      "path": "RUNTIME-ADAPTER-SPEC.md",
+      "sha256": "4b2e61f2f40012bf50b0b631e9e4112e36243fb47eb300dad71cfa860df19f5c"
+    },
+    {
+      "path": "VALIDATION.txt",
+      "sha256": "4a0a895c6ebc3007430a07c5880c06fff0a15c93744522dd24d3a41d75ddb1e4"
+    },
+    {
+      "path": "examples/runtime-adapter-descriptor.example.json",
+      "sha256": "7814909ad131bcd1024e5f9336ba5f03734955423dba307049f6225c2bf245b0"
+    },
+    {
+      "path": "schemas/runtime-adapter-descriptor.schema.json",
+      "sha256": "d5f012feddda3d8e9cdd8a71ef964093203bc9df6b420cf7f94741a4a7a4905a"
+    },
+    {
+      "path": "schemas/runtime-context.schema.json",
+      "sha256": "cd6f0bf13ce0b2e2c246abffb702e04a94dbbc9793000d9ba3fd6c0b8d24d3b0"
+    },
+    {
+      "path": "schemas/runtime-profile.schema.json",
+      "sha256": "464c1dcbe7310bbca046d46938c17f825028b3114b7b9e8ae6deac932556be85"
+    },
+    {
+      "path": "schemas/state-delta.schema.json",
+      "sha256": "5191d6e4618826f34e91ef2700fedcbdea2703b6b6c982e05abdd43f00c970a8"
+    },
+    {
+      "path": "schemas/state-request.schema.json",
+      "sha256": "d7097722622916aa26c16dd9ae74d49eab8f2d775e79f1853b6e05984f15106f"
+    }
+  ]
+}

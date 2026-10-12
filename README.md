@@ -1,61 +1,43 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
-
-## AIAP Core Protocol
-
-This repository is a reference adapter for the **AI Avatar Protocol (AIAP)**.
-
-The authoritative AIAP protocol specification, Core Schemas, whitepaper, governance documents, and reference implementation are maintained in the main repository:
-
-https://github.com/4b4sbms4mc-hub/ai-avatar-protocol
-
-**AIAP Core and this OpenClaw adapter are intentionally separated.**
-
-- `ai-avatar-protocol` defines the open interoperability standard.
-- `aiap-openclaw` demonstrates one implementation of that standard for the OpenClaw runtime.
-
-Compatibility with OpenClaw does not make OpenClaw part of the AIAP Core specification.
-
-# AIAP v0.3 for OpenClaw
-
-> **Public Release v0.3.0** — AIAP is intended as an open interoperability standard. Independent open-source and proprietary implementations are permitted under the repository license map. See `OPEN-STANDARD-POLICY.md`, `GOVERNANCE.md`, `LICENSE`, `IP-POLICY.md`, and `TRADEMARK.md`.
-
+# AIAP for OpenClaw — La Vida memory integration
 
 **Author / Project Maintainer: Wang Lu**
 
-This is the OpenClaw-compatible distribution of AI Avatar Protocol v0.3.
+AIAP is a runtime-neutral protocol for user-controlled AI state. This repository contains two separate OpenClaw integrations.
 
-It is packaged as an **Agent Plugins 1.0.0 bundle**, which OpenClaw can map into:
-- a workspace-compatible AIAP Skill
-- an MCP stdio server exposing AIAP validation/inspection tools
-- the complete AIAP v0.3 Core specifications, Schemas, examples, reference code, and English Whitepaper
+| Integration | Version | Purpose |
+|---|---|---|
+| La Vida native memory plugin | 0.3.4 | Scoped recall, pending proposals, independent owner approval |
+| AIAP Core Service | 0.2.0 | Local identity and persistent memory state used by La Vida |
+| Legacy Agent Plugins bundle | 0.3.0 | AIAP object inspection and MCP validation tools |
 
-## Install
+## First usable memory release
 
-From the unpacked directory:
+The experimental La Vida release is in [lavida/](lavida/README.md).
+[中文说明](lavida/README_CN.md) · [Fresh installation](lavida/docs/INSTALL_CN.md) · [Validation evidence](lavida/docs/VALIDATION.md) · [Releases](https://github.com/4b4sbms4mc-hub/aiap-openclaw/releases)
 
-```bash
-openclaw plugins install .
-openclaw plugins list
-openclaw plugins inspect aiap-avatar
-openclaw gateway restart
-```
+The initial loop is: an authenticated owner session proposes a memory; the owner reviews and approves or rejects it outside the plugin; approved memories become searchable and survive restart. Pending/rejected candidates are not active memories.
 
-OpenClaw should detect the root `plugin.json` as an Agent Plugins bundle.
+Default entry: one owner, one fixed space per adapter binding, literal search, manual requests, automatic proposals off and background archival off. Existing optional semantic/automatic functionality is retained.
 
-## Included AIAP MCP tools
-- `aiap_validate_identity`
-- `aiap_validate_transfer`
-- `aiap_inspect_avatar`
+The three native tools are `aiap_memory_status`, `aiap_memory_search`, and `aiap_memory_propose`.
+Tested target: OpenClaw 2026.9.4, Node 22+ with node:sqlite, Core Service 0.2.0.
+The release ZIP is standalone; installing the repository root installs the legacy bundle, not the new memory plugin. Follow the La Vida guide and install its `.tgz`.
 
-OpenClaw exposes bundle MCP tools with a server-name prefix.
+Local validation: 66 Core tests + 15 plugin integration checks + 15 automatic-candidate regression checks. Prior NAS deployment and isolated restore evidence are listed separately. GitHub CI additionally checks fresh Core Docker approval/recall and restart; see the exact commit checks and release CI_VALIDATION.json. Fresh OpenClaw installation and restored Gateway-to-Core tool calls remain pending.
 
-## Design choice
+Multi-member Bundle/Shared Space, organization management, secure cross-runtime transfer, a general MCP memory server and full workflow execution are future work. This release does not claim full AIAP compliance.
 
-This distribution intentionally uses the portable Agent Plugins bundle format instead of a native in-process OpenClaw plugin. The bundle has a narrower trust boundary and avoids depending on experimental OpenClaw native Plugin SDK APIs.
+## Legacy v0.3.0 bundle
 
-## Requirements
-- OpenClaw version supporting Agent Plugins bundles and bundle MCP stdio tools
-- Python 3 available on PATH for the included zero-dependency MCP validator
+The existing root `plugin.json`, `mcp.json`, `bin/`, `skills/` and embedded `aiap-core/` remain the legacy protocol-validation bundle. Its MCP tools are `aiap_validate_identity`, `aiap_validate_transfer` and `aiap_inspect_avatar`; these do not provide the La Vida persistent-memory interface.
+[Original installation and description](docs/legacy-v0.3.0.md).
 
-## Full protocol
-The complete standalone AIAP repository is embedded under `aiap-core/`.
+## Protocol and licenses
+
+The authoritative protocol repository is [ai-avatar-protocol](https://github.com/4b4sbms4mc-hub/ai-avatar-protocol).
+AIAP protocol, whitepaper, Core Service, plugin and legacy-bundle versions are independent. OpenClaw is a reference integration target.
+
+Code, schemas, examples and tests: Apache-2.0.
+Whitepapers, specifications and prose documentation: CC BY 4.0.
+Existing [license map](LICENSE), [open-standard policy](OPEN-STANDARD-POLICY.md), [IP policy](IP-POLICY.md) and [trademark policy](TRADEMARK.md) remain in force.

@@ -1,0 +1,31 @@
+{
+  "schema_version": "0.1",
+  "adapter_id": "aiap:adapter:example-runtime",
+  "version": "0.1.0",
+  "runtime": {
+    "runtime_id": "example-runtime",
+    "runtime_version": null
+  },
+  "compatibility_level": 2,
+  "supports": {
+    "context_injection": true,
+    "state_import": false,
+    "state_export": true,
+    "capability_mapping": true,
+    "workflow_execution": true,
+    "execution_trace": true,
+    "native_avatar": false
+  },
+  "interfaces": [
+    "inspect_runtime",
+    "compile_context",
+    "resolve_capability",
+    "execute_workflow",
+    "emit_trace",
+    "export_delta"
+  ],
+  "security": {
+    "credential_strategy": "opaque_reference"
+  },
+  "extensions": {}
+}

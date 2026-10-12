@@ -1,0 +1,6 @@
+PASS schema: runtime-adapter-descriptor.schema.json
+PASS schema: runtime-profile.schema.json
+PASS schema: runtime-context.schema.json
+PASS schema: state-request.schema.json
+PASS schema: state-delta.schema.json
+PASS example: runtime-adapter-descriptor.example.json

@@ -1,0 +1,16 @@
+PASS bounded direct-statement extraction rejects quotes, questions, temporary statements and common sensitive patterns
+PASS automatic mode requires a configured general main-session binding
+PASS owner turn automatically generates a sourced, scoped pending candidate; no approval or active recall
+PASS private registry stores keyed fingerprints and source pointers, without memory text or credentials
+PASS pending duplicate suppressed across repeated messages and plugin restarts
+PASS non-owner, system, group, other agent, sandbox, old/missing source and failed runs cannot propose
+PASS historical owner messages are not replayed as new candidates
+PASS only owner approval activates recall; accepted candidates are not proposed again
+PASS existing active exact statement suppresses automatic proposal
+PASS rejected candidates stay inactive and repeat statements stay suppressed
+PASS parallel event completion is serialized and produces one pending candidate
+PASS plugin hook registration and owner status expose candidate IDs and current review states
+PASS unsafe registry permissions and symlink directories fail closed
+PASS lost response reconciles the Core candidate instead of adding another
+PASS revoked adapter grant stops automatic writes
+PASS 15 automatic checks. Real temporary Core HTTP; simulated OpenClaw hook dispatch. NAS runtime acceptance still required.

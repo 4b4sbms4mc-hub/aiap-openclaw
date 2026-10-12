@@ -1,0 +1,209 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiap.dev/schema/v0.1/workflow-descriptor.schema.json",
+  "title": "AIAP WorkflowDescriptor v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "workflow_id",
+    "owner_avatar_id",
+    "name",
+    "intent",
+    "steps",
+    "origin",
+    "status",
+    "version"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1"
+    },
+    "workflow_id": {
+      "type": "string",
+      "pattern": "^aiap:workflow:[A-Za-z0-9._:-]+$"
+    },
+    "owner_avatar_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "intent": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string"
+    },
+    "trigger": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "step_id",
+          "capability_id"
+        ],
+        "properties": {
+          "step_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "capability_id": {
+            "type": "string",
+            "pattern": "^aiap:capability:[A-Za-z0-9._:-]+$"
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "condition": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "depends_on": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "on_success": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "on_failure": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "required": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      }
+    },
+    "outputs": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "error_policy": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "origin": {
+      "enum": [
+        "bootstrap",
+        "user_defined",
+        "learned",
+        "learned_from_bootstrap",
+        "imported"
+      ]
+    },
+    "base_workflow_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "personal_delta": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "portability": {
+      "enum": [
+        "portable",
+        "runtime_specific"
+      ]
+    },
+    "runtime_constraints": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "status": {
+      "enum": [
+        "candidate",
+        "validated",
+        "personal",
+        "deprecated",
+        "dormant",
+        "archived"
+      ]
+    },
+    "statistics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "usage_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "success_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failure_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "success_rate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "last_used": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      }
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "extensions": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+      },
+      "additionalProperties": true
+    }
+  }
+}

@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiap.dev/schema/v0.1/skill.schema.json",
+  "title": "AIAP Skill Profile Domain v0.1",
+  "type": "object",
+  "required": [
+    "domain_id",
+    "version",
+    "data"
+  ],
+  "properties": {
+    "domain_id": {
+      "const": "aiap.skills"
+    },
+    "version": {
+      "const": "0.1"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "items"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "skill_id",
+              "status"
+            ],
+            "properties": {
+              "skill_id": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "enabled",
+                  "disabled",
+                  "revoked",
+                  "archived"
+                ]
+              },
+              "usage": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "user_preference": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "permissions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "compatibility": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "extensions": {
+                "$ref": "common.schema.json#/$defs/extensionBag"
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "extensions": {
+      "$ref": "common.schema.json#/$defs/extensionBag"
+    }
+  },
+  "additionalProperties": true
+}

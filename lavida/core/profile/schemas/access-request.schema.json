@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.aiap.invalid/core-profile/0.1-draft/access-request.schema.json",
+  "title": "AIAP Core Profile draft — access-request",
+  "type": "object",
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "authenticated_subject_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "auth_evidence_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "avatar_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runtime_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "space_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "action": {
+      "enum": [
+        "read",
+        "write",
+        "share",
+        "export",
+        "delete",
+        "admin",
+        "process"
+      ]
+    },
+    "purpose": {
+      "type": "string",
+      "minLength": 1
+    },
+    "processor_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 0,
+      "uniqueItems": true
+    },
+    "issued_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "request_id",
+    "authenticated_subject_ref",
+    "auth_evidence_ref",
+    "avatar_id",
+    "session_ref",
+    "runtime_ref",
+    "space_refs",
+    "action",
+    "purpose",
+    "processor_refs",
+    "issued_at",
+    "expires_at"
+  ],
+  "additionalProperties": false
+}

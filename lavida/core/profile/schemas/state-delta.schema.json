@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.aiap.invalid/core-profile/0.1-draft/state-delta.schema.json",
+  "title": "AIAP Core Profile draft — state-delta",
+  "type": "object",
+  "properties": {
+    "profile_version": {
+      "const": "0.1-draft"
+    },
+    "request": {
+      "$ref": "access-request.schema.json"
+    },
+    "delta": {
+      "allOf": [
+        {
+          "$ref": "https://aiap.dev/schema/v0.1/state-delta.schema.json"
+        },
+        {
+          "properties": {
+            "status": {
+              "const": "proposed"
+            }
+          }
+        }
+      ]
+    },
+    "bindings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "change_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "target_object_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "owner_ref": {
+                "type": "string",
+                "minLength": 1
+              },
+              "space_ref": {
+                "type": "string",
+                "minLength": 1
+              },
+              "policy_ref": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "version": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "required": [
+                  "id",
+                  "version"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "owner_ref",
+              "space_ref",
+              "policy_ref"
+            ],
+            "additionalProperties": false
+          },
+          "base_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "source_refs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "confirmation_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "change_id",
+          "target_object_id",
+          "scope",
+          "base_revision",
+          "source_refs",
+          "confirmation_ref"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "profile_version",
+    "request",
+    "delta",
+    "bindings"
+  ],
+  "additionalProperties": false
+}

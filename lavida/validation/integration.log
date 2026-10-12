@@ -1,0 +1,16 @@
+PASS host identity, session and sandbox isolation
+PASS scoped authentication against actual Core
+PASS work credential cannot retrieve life memory
+PASS model cannot override fixed scope
+PASS separate life binding reads only life memory
+PASS proposal does not silently become active memory
+PASS owner review and approval enables recall
+PASS adapter credential cannot approve
+PASS reject owner token, multi-space token and wrong avatar
+PASS credential permissions enforced
+PASS plugin registration contract and tool execution (host harness)
+PASS cancellation forwarded
+PASS revocation effective on next query; no stale cache
+PASS safe error reporting without secrets
+PASS redirect cannot forward bearer token
+PASS 15 checks; actual AIAP HTTP server + plugin host harness. Full OpenClaw runtime not executed.

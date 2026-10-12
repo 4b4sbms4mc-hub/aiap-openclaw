@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiap.dev/schema/v0.1/runtime-binding.schema.json",
+  "title": "AIAP RuntimeBinding v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "binding_id",
+    "capability_id",
+    "runtime",
+    "implementation",
+    "mapping_class",
+    "confidence",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1"
+    },
+    "binding_id": {
+      "type": "string",
+      "pattern": "^aiap:binding:[A-Za-z0-9._:-]+$"
+    },
+    "capability_id": {
+      "type": "string",
+      "pattern": "^aiap:capability:[A-Za-z0-9._:-]+$"
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runtime_id"
+      ],
+      "properties": {
+        "runtime_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtime_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "adapter_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "implementation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "ref"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "skill",
+            "tool",
+            "agent",
+            "api",
+            "workflow",
+            "composite"
+          ]
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "component_refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "mapping_class": {
+      "enum": [
+        "exact",
+        "compatible",
+        "partial",
+        "composite",
+        "unresolved"
+      ]
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "parameter_mapping": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "output_mapping": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "requires_user_confirmation": {
+      "type": "boolean"
+    },
+    "status": {
+      "enum": [
+        "active",
+        "disabled",
+        "deprecated",
+        "unresolved"
+      ]
+    },
+    "verified_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "extensions": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

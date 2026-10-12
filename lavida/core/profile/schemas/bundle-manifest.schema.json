@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.aiap.invalid/core-profile/0.1-draft/bundle-manifest.schema.json",
+  "title": "AIAP Core Profile draft — bundle-manifest",
+  "type": "object",
+  "properties": {
+    "profile_version": {
+      "const": "0.1-draft"
+    },
+    "bundle_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "previous_revision": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "cores": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "avatar_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "owner_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "core_ref": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "version": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "id",
+              "version"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "avatar_id",
+          "owner_ref",
+          "core_ref"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "shared_spaces": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "id",
+          "version"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "uniqueItems": true
+    },
+    "required_extensions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "namespace": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "critical": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "namespace",
+          "version",
+          "critical"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "profile_version",
+    "bundle_id",
+    "revision",
+    "previous_revision",
+    "cores",
+    "shared_spaces",
+    "required_extensions",
+    "created_at"
+  ],
+  "additionalProperties": false
+}
