@@ -1,0 +1,97 @@
+{
+  "id": "lavida-aiap",
+  "name": "La Vida for OpenClaw",
+  "version": "0.3.4",
+  "description": "Scoped AIAP recall, owner-reviewed proposals and optional direct-statement automatic candidates.",
+  "kind": "memory",
+  "categories": [
+    "memory",
+    "tools"
+  ],
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "aiap_memory_status",
+      "aiap_memory_search",
+      "aiap_memory_propose"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "default": "http://aiap-core:8042"
+      },
+      "avatarId": {
+        "type": "string"
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 100,
+        "maximum": 150000,
+        "default": 120000
+      },
+      "bindings": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "spaceRef",
+            "credentialFile",
+            "purpose",
+            "runtimeRef",
+            "sessionKeys"
+          ],
+          "properties": {
+            "spaceRef": {
+              "type": "string",
+              "enum": [
+                "space:general",
+                "space:life",
+                "space:work"
+              ]
+            },
+            "credentialFile": {
+              "type": "string"
+            },
+            "purpose": {
+              "type": "string",
+              "minLength": 1
+            },
+            "runtimeRef": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sessionKeys": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "default": {}
+      },
+      "autoPropose": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "stateDir": {
+            "type": "string",
+            "default": "/home/node/.openclaw/lavida-auto"
+          }
+        }
+      }
+    }
+  }
+}

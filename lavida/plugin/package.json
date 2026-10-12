@@ -1,0 +1,16 @@
+{
+  "name": "@lavida/aiap-openclaw",
+  "version": "0.3.4",
+  "type": "module",
+  "private": true,
+  "author": "Wang Lu",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  }
+}
