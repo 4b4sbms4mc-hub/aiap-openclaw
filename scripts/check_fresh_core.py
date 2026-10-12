@@ -3,8 +3,6 @@
 import json
 import subprocess
 import time
-import urllib.error
-import urllib.request
 
 COMPOSE = ["docker", "compose", "-f", "lavida/compose.yaml"]
 
@@ -13,10 +11,13 @@ def ready():
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen("http://127.0.0.1:8043/health", timeout=2) as r:
-                if json.load(r).get("initialized") is True:
-                    return
-        except (OSError, ValueError):
+            result = subprocess.run(
+                COMPOSE + ["exec", "-T", "core", "python", "-c",
+                           "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8042/health', timeout=2).read().decode())"],
+                text=True, capture_output=True, timeout=5)
+            if result.returncode == 0 and json.loads(result.stdout).get("initialized") is True:
+                return
+        except (OSError, ValueError, subprocess.TimeoutExpired):
             pass
         time.sleep(1)
     raise RuntimeError("Fresh Core did not become ready")
@@ -29,6 +30,12 @@ def inside(code):
 
 
 ready()
+network_probe = subprocess.run(
+    COMPOSE + ["run", "--rm", "--no-deps", "--entrypoint", "python", "core", "-c",
+               "import json, urllib.request; print(json.dumps({'private_network_reachable': json.load(urllib.request.urlopen('http://aiap-mvp-core:8042/health', timeout=5))['initialized']}))"],
+    text=True, capture_output=True, check=True, timeout=30)
+network_health = json.loads(network_probe.stdout)
+assert network_health["private_network_reachable"] is True
 first = inside('''
 import json
 from pathlib import Path
@@ -64,4 +71,4 @@ assert session['avatar_id'] == expected['avatar']
 assert len(items) == 1 and items[0]['memory_id'] == expected['memory'] and items[0]['revision'] == expected['revision']
 print(json.dumps({'restart_identity':True, 'restart_memory_revision':True}))
 ''')
-print(json.dumps({**first, **second}, indent=2))
+print(json.dumps({**network_health, **first, **second}, indent=2))
