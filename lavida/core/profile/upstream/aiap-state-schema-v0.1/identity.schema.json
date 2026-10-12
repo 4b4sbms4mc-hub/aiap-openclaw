@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiap.dev/schema/v0.1/identity.schema.json",
+  "title": "AIAP Identity Domain v0.1",
+  "type": "object",
+  "required": [
+    "domain_id",
+    "version",
+    "data"
+  ],
+  "properties": {
+    "domain_id": {
+      "const": "aiap.identity"
+    },
+    "version": {
+      "const": "0.1"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "identity_id",
+        "owner_id",
+        "type"
+      ],
+      "properties": {
+        "identity_id": {
+          "type": "string"
+        },
+        "owner_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "person",
+            "organization",
+            "other"
+          ]
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "ownership": {
+          "type": "object",
+          "properties": {
+            "controller": {
+              "type": "string"
+            },
+            "verification_method": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": true
+    },
+    "extensions": {
+      "$ref": "common.schema.json#/$defs/extensionBag"
+    }
+  },
+  "additionalProperties": true
+}

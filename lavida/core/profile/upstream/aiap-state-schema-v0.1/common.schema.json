@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiap.dev/schema/v0.1/common.schema.json",
+  "title": "AIAP Common Types v0.1",
+  "type": "object",
+  "$defs": {
+    "lifecycleStatus": {
+      "type": "string",
+      "enum": [
+        "candidate",
+        "active",
+        "superseded",
+        "archived",
+        "revoked",
+        "deleted"
+      ]
+    },
+    "provenance": {
+      "type": "object",
+      "required": [
+        "source_type"
+      ],
+      "properties": {
+        "source_type": {
+          "type": "string",
+          "enum": [
+            "explicit-user",
+            "observed",
+            "inferred",
+            "imported",
+            "system",
+            "external-generated"
+          ]
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "origin_runtime": {
+          "type": "string"
+        },
+        "origin_device": {
+          "type": "string"
+        },
+        "signed": {
+          "type": "boolean",
+          "default": false
+        },
+        "verified": {
+          "type": "boolean",
+          "default": false
+        },
+        "trust_level": {
+          "type": "string",
+          "enum": [
+            "owner-verified",
+            "trusted-runtime",
+            "verified-import",
+            "unverified-import",
+            "inferred",
+            "untrusted"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "extensionBag": {
+      "type": "object",
+      "description": "Namespaced implementation extensions. Keys SHOULD use reverse-DNS or x-* names.",
+      "propertyNames": {
+        "pattern": "^(x-[A-Za-z0-9._-]+|[a-z0-9]+(?:\\.[a-z0-9-]+){2,})$"
+      },
+      "additionalProperties": true
+    },
+    "genericDomain": {
+      "type": "object",
+      "description": "Envelope for non-core, namespaced state domains.",
+      "required": [
+        "domain_id",
+        "version",
+        "data"
+      ],
+      "properties": {
+        "domain_id": {
+          "type": "string",
+          "minLength": 3
+        },
+        "schema_uri": {
+          "type": "string",
+          "format": "uri-reference"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "$ref": "#/$defs/lifecycleStatus"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {},
+        "extensions": {
+          "$ref": "#/$defs/extensionBag"
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}
