@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiap.dev/schema/v0.1/runtime-adapter-descriptor.schema.json",
+  "title": "AIAP RuntimeAdapterDescriptor v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "adapter_id",
+    "runtime",
+    "compatibility_level",
+    "supports",
+    "version"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1"
+    },
+    "adapter_id": {
+      "type": "string",
+      "pattern": "^aiap:adapter:[A-Za-z0-9._:-]+$"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runtime_id"
+      ],
+      "properties": {
+        "runtime_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtime_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "compatibility_level": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3
+    },
+    "supports": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context_injection",
+        "state_import",
+        "state_export",
+        "capability_mapping",
+        "workflow_execution",
+        "execution_trace",
+        "native_avatar"
+      ],
+      "properties": {
+        "context_injection": {
+          "type": "boolean"
+        },
+        "state_import": {
+          "type": "boolean"
+        },
+        "state_export": {
+          "type": "boolean"
+        },
+        "capability_mapping": {
+          "type": "boolean"
+        },
+        "workflow_execution": {
+          "type": "boolean"
+        },
+        "execution_trace": {
+          "type": "boolean"
+        },
+        "native_avatar": {
+          "type": "boolean"
+        }
+      }
+    },
+    "interfaces": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "inspect_runtime",
+          "compile_context",
+          "resolve_capability",
+          "execute_workflow",
+          "emit_trace",
+          "export_delta"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "extensions": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+      },
+      "additionalProperties": true
+    }
+  }
+}
