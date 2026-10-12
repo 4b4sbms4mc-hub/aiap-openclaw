@@ -40,7 +40,7 @@ python3 -m venv .venv
 
 Run each command separately. Initialization generates private credentials and keys; never upload the `data/` directory. The HTTP listener defaults to loopback. Windows uses `.venv\Scripts\python.exe`.
 
-For Docker and OpenClaw, follow the Chinese installation guide. The included Compose uses a new project/volume, loopback port 8043 and a private network. It does not restore or upgrade the user's existing deployment.
+For Docker and OpenClaw, follow the Chinese installation guide. The included Compose uses a new project/volume and a private internal network, with no published host ports. Owner commands run through `docker compose exec`; OpenClaw joins the private network to reach Core on port 8042. It does not restore or upgrade the user's existing deployment.
 
 ## Roadmap
 
