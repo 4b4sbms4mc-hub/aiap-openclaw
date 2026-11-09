@@ -1,9 +1,13 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # Validation evidence and limits
 
+## Read-only NAS access inventory (2026-11-10)
+
+Four tests bring scripts/tests to 163. Synthetic command fixtures verify filtered SSH/account/container metadata, unchanged account files, sensitive-value redaction, input rejection, symlink reporting, and refusal to fall back from unsupported `sshd -G` to host-key tests. These tests do not inspect a real NAS. Effective running-daemon configuration is not established by a default-config parse; operator metadata is still needed. [Scope and operator use](NAS_ACCESS_PREFLIGHT_CN.md).
+
 ## Separate Keychain SSH identity preparation (2026-11-09)
 
-Ten tests bring scripts/tests to 159: real OpenSSH-agent add/list/sign/expiry/cleanup with synthetic identities, public-only `ssh -G` parsing, frame bounds, namespace/role separation and unavailable/corrupt/duplicate refusal. Keychain is a test-only memory store for these cases; no real SSH credential or NAS authorization is created. The existing approved witness credential passed a native read/signature regression after namespace refactoring. [Preparation and authentication boundaries](SSH_IDENTITY_PREPARATION_CN.md).
+Ten tests bring scripts/tests to 159: real OpenSSH-agent add/list/sign/expiry/cleanup with synthetic identities, public-only `ssh -G` parsing, frame bounds, namespace/role separation and unavailable/corrupt/duplicate refusal. Keychain is a test-only memory store for these cases; these tests create no real credential or NAS authorization. A separately approved native Mac operation subsequently created one dedicated SSH credential and passed agent self-tests plus fresh-process readback; no NAS authorization or connection was performed. The existing approved witness credential passed a native read/signature regression after namespace refactoring. [Preparation and authentication boundaries](SSH_IDENTITY_PREPARATION_CN.md).
 
 ## Create-only Mac Keychain signer preparation (2026-11-09)
 
