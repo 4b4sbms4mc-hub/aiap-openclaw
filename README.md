@@ -30,7 +30,7 @@ The [latest protocol design drafts](https://github.com/4b4sbms4mc-hub/ai-avatar-
 
 Multi-member Bundle/Shared Space, organization management, secure cross-runtime transfer, a general MCP memory server and full workflow execution are future work. This release does not claim full AIAP compliance.
 
-An experimental repository-only [old-snapshot recovery governance tool](lavida/docs/RECOVERY_GOVERNANCE_CN.md) applies an independently pinned current local checkpoint, excludes deleted/stale records, and revokes all old credentials. Its 17 isolated tests do not establish checkpoint freshness by themselves, production/NAS recovery or secure transfer. Core Service and plugin behavior versions are unchanged by this development helper.
+An experimental repository-only [old-snapshot recovery governance tool](lavida/docs/RECOVERY_GOVERNANCE_CN.md) applies an independently pinned current local checkpoint, excludes deleted/stale records, and revokes all old credentials. Its 22 isolated tests do not establish checkpoint freshness by themselves, production/NAS recovery or secure transfer. Core Service and plugin behavior versions are unchanged by this development helper.
 
 ## Legacy v0.3.0 bundle
 
