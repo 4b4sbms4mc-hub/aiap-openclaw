@@ -1,9 +1,13 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # Validation evidence and limits
 
+## Separate Keychain SSH identity preparation (2026-11-09)
+
+Ten tests bring scripts/tests to 159: real OpenSSH-agent add/list/sign/expiry/cleanup with synthetic identities, public-only `ssh -G` parsing, frame bounds, namespace/role separation and unavailable/corrupt/duplicate refusal. Keychain is a test-only memory store for these cases; no real SSH credential or NAS authorization is created. The existing approved witness credential passed a native read/signature regression after namespace refactoring. [Preparation and authentication boundaries](SSH_IDENTITY_PREPARATION_CN.md).
+
 ## Create-only Mac Keychain signer preparation (2026-11-09)
 
-Ten new tests bring scripts/tests to 149. In-memory-store tests cover confirmation, duplicate preservation, binding/secret corruption, unavailable/missing items, signature domains and integration with the durable witness transaction. A native-status fixture checks duplicate SecItemAdd rejection without delete/update. The actual Mac passed an exact-service, random nonexistent-item query/read/release probe with no writes. Actual system credential creation, access policy and post-create self-test remain pending explicit scoped confirmation; they are not claimed by mock tests or CI. [Provisioning scope and limits](MAC_KEYCHAIN_SIGNER_CN.md).
+Ten tests originally brought scripts/tests to 149. In-memory-store tests cover confirmation, duplicate preservation, binding/secret corruption, unavailable/missing items, signature domains and integration with the durable witness transaction. A native-status fixture checks duplicate SecItemAdd rejection without delete/update. After explicit scoped approval, actual Mac system credential creation, read-back, signing self-test and fresh-process public read-back all passed. This real operator step is distinct from mocks and CI. [Provisioning scope and limits](MAC_KEYCHAIN_SIGNER_CN.md).
 
 ## Independent durable live witness and public identity inspection (2026-11-09)
 

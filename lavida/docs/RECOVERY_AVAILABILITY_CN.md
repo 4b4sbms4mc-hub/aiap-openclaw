@@ -32,7 +32,7 @@ SQLite 观察使用 `mode=ro`、`query_only`、只读事务和完整已知 Schem
 
 18 项新测试包含：普通 Core 离线删除/撤销继续、旧检查点拒绝、当前删除检查点实际恢复后不复活、观察前后合成源文件摘要不变、不返回正文/token/私钥、nonce 重放、签名/范围/时效、未知 Schema/旁文件/符号链接/缺失 DB、持久 reader 接受及新见证信任根拒绝，以及上述两个限制的负例。与既有 101 项合计 119 项。
 
-此文件中的 LiveObservationWitness 是内存状态机；后续已增加[独立持久见证隔离实现](RECOVERY_DURABLE_LIVE_WITNESS_CN.md)和[只新增 Mac 钥匙串签名器准备](MAC_KEYCHAIN_SIGNER_CN.md)。真实凭据创建尚待明确确认。跨设备认证传输、源端 restricted endpoint、轮换及控制丢失处理、恢复激活前的再次核对与后续撤销仍未完成。现有 `SourceGate` 是另一种同机同步实验，不会因这些代码而改变生产写入。
+此文件中的 LiveObservationWitness 是内存状态机；后续已增加[独立持久见证隔离实现](RECOVERY_DURABLE_LIVE_WITNESS_CN.md)和[只新增 Mac 钥匙串签名器](MAC_KEYCHAIN_SIGNER_CN.md)，见证签名凭据已按具体批准在本机创建。[SSH 身份准备](SSH_IDENTITY_PREPARATION_CN.md)使用另一个 namespace，真实登录凭据另待明确确认。跨设备认证传输、源端 restricted endpoint、轮换及控制丢失处理、恢复激活前的再次核对与后续撤销仍未完成。现有 `SourceGate` 是另一种同机同步实验，不会因这些代码而改变生产写入。
 
 接入前应先完成可审阅的配置与隔离端到端验收包：限定的源端命令和消息大小/超时、SSH 主机和客户端公钥固定、禁止任意 shell/转发、只读 volume 与密钥访问清单、Mac 本地持久目录与签名器、启动/停用/回退步骤。实际部署须另行确认具体变更；本轮策略确认和只读预检不代替生产授权。
 
