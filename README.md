@@ -32,6 +32,8 @@ Multi-member Bundle/Shared Space, organization management, secure cross-runtime 
 
 An experimental repository-only [old-snapshot recovery governance tool](lavida/docs/RECOVERY_GOVERNANCE_CN.md) applies an independently pinned current local checkpoint, excludes deleted/stale records, and revokes all old credentials. Its 22 isolated tests do not establish checkpoint freshness by themselves, production/NAS recovery or secure transfer. Core Service and plugin behavior versions are unchanged by this development helper.
 
+A repository-only [synthetic witness experiment](lavida/docs/RECOVERY_WITNESS_CN.md) adds 16 tests for signed nonce-bound heads, pending-update blocking and in-process rollback checks. It also reproduces source-update bypass and loss of rollback memory after restart; it does not supply an independent production witness.
+
 ## Legacy v0.3.0 bundle
 
 The existing root `plugin.json`, `mcp.json`, `bin/`, `skills/` and embedded `aiap-core/` remain the legacy protocol-validation bundle. Its MCP tools are `aiap_validate_identity`, `aiap_validate_transfer` and `aiap_inspect_avatar`; these do not provide the La Vida persistent-memory interface.

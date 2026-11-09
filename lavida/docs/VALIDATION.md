@@ -1,6 +1,10 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # Validation evidence and limits
 
+## Synthetic witness state machine (2026-11-09)
+
+Sixteen in-memory witness tests plus the 22 recovery tests pass (38 total), using real Ed25519 signatures and a checkpoint-to-isolated-restore flow. Two explicit negative tests demonstrate source-update bypass and rollback after reader-state loss; this is not a durable independent witness or activation service. [Behavior, reproduction and remaining trust gaps](RECOVERY_WITNESS_CN.md).
+
 ## Experimental old-snapshot governance (2026-11-09)
 
 Twenty-two local development tests passed for `scripts/recovery_guard.py`, including a real CLI restore followed by a new HTTP Core process. Current pinned checkpoint tombstones and exact record manifests exclude deleted/stale data; all old grants are revoked and fresh credentials are required. Source snapshots remain unchanged. Catchable failures clean staging; SIGKILL before publication leaves private residue and an empty reservation, while SIGKILL after rename leaves a complete target. No power-loss durability claim is made. A within-TTL stale-checkpoint negative test demonstrates that signatures and pins do not detect subsequent source deletion. [Trust assumptions, bounds and reproduction](RECOVERY_GOVERNANCE_CN.md). This helper is not a production Core API or remote transfer implementation; the operator must independently establish current checkpoint freshness.
