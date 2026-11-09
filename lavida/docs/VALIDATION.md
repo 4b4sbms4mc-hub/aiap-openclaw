@@ -1,6 +1,12 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # Validation evidence and limits
 
+## Real Gateway fresh install and isolated restore (2026-11-09)
+
+Codex executed `scripts/check_openclaw_gateway.py` with the packaged release ZIP, official OpenClaw 2026.9.4, Node 24.22.1 and Python 3.12.14 on macOS. Real Gateway HTTP tools exercised archive installation, pending/approved/rejected handling, fixed-space isolation, wrong-token/unbound-session rejection, stopped-snapshot checksums/SQLite integrity, original-state isolation, restored identity/memory/revision/local-signature continuity, and a new proposal/approval/recall after restore. Generated private state and processes were removed.
+
+This is authenticated `/tools/invoke` evidence, not model-selected conversational tool use or Docker/NAS OpenClaw installation evidence. [Procedure and limits](GATEWAY_ACCEPTANCE_CN.md). Core's existing 66 tests, 15 HTTP integration checks and 15 automatic regression checks also passed again. Historical results below retain their original scope.
+
 ## Existing deployment evidence (user-executed NAS tests, 2026-10-12)
 
 - Core 0.2.0 / La Vida 0.3.4 / OpenClaw 2026.9.4.
@@ -38,7 +44,7 @@ Core code and plugin source are copied without functional edits. This is release
 
 ## Not verified by those results
 
-Fresh Docker image build/Compose install from this package; restored Gateway→plugin→Core tool calls; second runtime/MCP; multi-owner isolation; secure cross-runtime transfer. Prior backup tests do not prove full AIAP secure-transfer or revocation-aware recovery compliance.
+At the original packaging date: fresh Docker image build/Compose install from this package; restored Gateway→plugin→Core tool calls; second runtime/MCP; multi-owner isolation; secure cross-runtime transfer. Later Docker CI and the real Gateway HTTP validation above address their stated subsets. Prior backup tests do not prove full AIAP secure-transfer or revocation-aware recovery compliance.
 
 ## Fresh Core Docker CI
 

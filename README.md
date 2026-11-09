@@ -21,10 +21,12 @@ The initial loop is: an authenticated owner session proposes a memory; the owner
 Default entry: one owner, one fixed space per adapter binding, literal search, manual requests, automatic proposals off and background archival off. Existing optional semantic/automatic functionality is retained.
 
 The three native tools are `aiap_memory_status`, `aiap_memory_search`, and `aiap_memory_propose`.
-Tested target: OpenClaw 2026.9.4, Node 22+ with node:sqlite, Core Service 0.2.0.
+Tested target: OpenClaw 2026.9.4, Node 24.22.1, Core Service 0.2.0. The plugin itself needs Node 22+ with node:sqlite; the pinned host requires >=24.16.0 <25 or >=26.1.0.
 The release ZIP is standalone; installing the repository root installs the legacy bundle, not the new memory plugin. Follow the La Vida guide and install its `.tgz`.
 
-Local validation: 66 Core tests + 15 plugin integration checks + 15 automatic-candidate regression checks. Prior NAS deployment and isolated restore evidence are listed separately. GitHub CI additionally checks fresh Core Docker approval/recall and restart; see the exact commit checks and release CI_VALIDATION.json. Fresh OpenClaw installation and restored Gateway-to-Core tool calls remain pending.
+Validation: 66 Core tests + 15 plugin integration checks + 15 automatic-candidate regression checks. On 2026-11-09, real OpenClaw Gateway HTTP tests passed release-ZIP fresh installation and isolated stopped-snapshot restoration, including restored tool calls and a new approval/recall loop. Prior NAS results and Core Docker CI remain separate evidence. Conversational model-selected tool use and full Docker/NAS OpenClaw new installation remain pending. See [procedure and exact limits](lavida/docs/GATEWAY_ACCEPTANCE_CN.md).
+
+The [latest protocol design drafts](https://github.com/4b4sbms4mc-hub/ai-avatar-protocol/tree/main/drafts) are versioned separately. Validation runs on relevant PR/main changes. Publishing a new tag is an explicit workflow-dispatch operation; existing 0.3.4 release assets are not overwritten by documentation or test updates.
 
 Multi-member Bundle/Shared Space, organization management, secure cross-runtime transfer, a general MCP memory server and full workflow execution are future work. This release does not claim full AIAP compliance.
 

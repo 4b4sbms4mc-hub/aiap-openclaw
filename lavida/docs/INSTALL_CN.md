@@ -1,6 +1,6 @@
 # 全新安装：先 Core，后 OpenClaw
 
-这是供新用户复现的入口，不是当前 NAS 的升级或恢复指令。Python 3.12 / Docker Compose v2 为参考环境；插件要求 Node >=22 并支持 node:sqlite，实际目标为 OpenClaw 2026.9.4。镜像构建需要访问 Python 镜像和依赖源；不提供完整离线镜像。
+这是供新用户复现的入口，不是当前 NAS 的升级或恢复指令。Python 3.12 / Docker Compose v2 为参考环境。插件自身要求 Node >=22 并支持 node:sqlite；官方 OpenClaw 2026.9.4 包的要求更高，为 Node >=24.16.0 且 <25，或 >=26.1.0。本次实际使用 Node 24.22.1。镜像构建需要访问 Python 镜像和依赖源；不提供完整离线镜像。
 
 ## 1. 单独启动 Core
 
@@ -64,10 +64,10 @@ docker compose exec -T core cat /data/lavida-main.json | docker exec -i --user 0
 ```sh
 docker network connect aiap-mvp-local openclaw
 docker cp lavida-aiap-0.3.4.tgz openclaw:/tmp/lavida-aiap-0.3.4.tgz
-docker exec openclaw openclaw plugins install /tmp/lavida-aiap-0.3.4.tgz --accept-capabilities
+docker exec openclaw openclaw plugins install /tmp/lavida-aiap-0.3.4.tgz --accept-capabilities --force
 ```
 
-这是首次安装入口；如果插件已经存在，不要直接覆盖，按当前版本另行安排升级。已有网络连接也不要重复执行 network connect。
+这是首次安装入口。2026.9.4 对 ClawHub 之外的本地包要求明确确认来源；这里的 --force 仅在核对发布包、摘要和目标尚未安装该插件后使用，它也有覆盖能力。如果插件已经存在，不要执行这条命令，按当前版本另行安排升级。已有网络连接也不要重复执行 network connect。
 
 根据 Core 的 session 输出，将 config.example.json 中 avatarId 替换为实际值；把插件 entry 和 memory slot 合并到现有配置，保留其他配置，不整份覆盖。baseUrl 指向 aiap-mvp-core:8042，自动提案关闭，绑定只允许 agent:main:main。配置中只存凭证路径。
 
@@ -84,4 +84,4 @@ docker exec openclaw openclaw plugins inspect lavida-aiap --runtime --json
 
 恢复原 memory 插槽并禁用 La Vida 可回退 OpenClaw 接口；保留 Core 数据卷。不执行 docker compose down -v。源程序不导入既有 Markdown 或聊天记录，不自动创建生活/工作会话绑定。
 
-语义检索、自动提案、完整生命周期、备份恢复及撤销后上下文清理分别验收。本安装路径和 Compose 打包尚未经过新的 Docker/NAS 全新安装复测，已验证的既有部署见 VALIDATION.md。
+语义检索、自动提案、完整生命周期和撤销后上下文清理分别验收。2026-11-09 已通过发布 ZIP 在真实 OpenClaw 2026.9.4 Gateway 的全新安装和停机快照隔离恢复 HTTP 工具调用验收；复现方式及边界见 [GATEWAY_ACCEPTANCE_CN.md](GATEWAY_ACCEPTANCE_CN.md)。本机、虚拟机、Docker 或 NAS 均可部署；不要求在个人电脑全局安装 OpenClaw。该测试未验证 Docker/NAS 的完整新安装，也未验证对话模型自主调用工具。

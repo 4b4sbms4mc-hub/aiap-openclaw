@@ -5,8 +5,13 @@ on:
     paths: ["lavida/**", "scripts/**", ".github/workflows/lavida-release.yml"]
   push:
     branches: [main]
-    paths: ["lavida/RELEASE.json", ".github/workflows/lavida-release.yml"]
+    paths: ["lavida/**", "scripts/**", ".github/workflows/lavida-release.yml"]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a new prerelease tag after validation (existing tags are never overwritten)
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -25,7 +30,7 @@ jobs:
           python-version: "3.12"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: "22"
+          node-version: "24.22.1"
       - name: Install Python dependencies
         run: python -m pip install -r lavida/core/requirements.txt
       - name: Core tests (66)
@@ -41,6 +46,16 @@ jobs:
         env:
           PYTHONPATH: core
         run: node plugin-tests/automatic.mjs
+      - name: Install pinned real OpenClaw in temporary runtime
+        run: npm install --prefix "$RUNNER_TEMP/aiap-openclaw-host" --ignore-scripts --no-audit --no-fund openclaw@2026.9.4
+      - name: Package source and verify real Gateway fresh install and isolated restore
+        run: |
+          python scripts/package_lavida.py
+          python scripts/check_openclaw_gateway.py --openclaw-entry "$RUNNER_TEMP/aiap-openclaw-host/node_modules/openclaw/openclaw.mjs" --release-zip dist/LaVida_for_OpenClaw_0.3.4.zip --output .validation/gateway.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lavida-gateway-acceptance
+          path: .validation/gateway.json
       - name: Build and initialize fresh Core Docker fixture
         run: |
           docker compose -f lavida/compose.yaml build
@@ -53,7 +68,7 @@ jobs:
         run: docker compose -f lavida/compose.yaml down -v
   release:
     needs: checks
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.publish
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -62,8 +77,12 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: lavida-gateway-acceptance
+          path: .validation
       - name: Package validated source
-        run: python scripts/package_lavida.py --ci
+        run: python scripts/package_lavida.py --ci --gateway-report .validation/gateway.json
       - name: Publish prerelease with verified download assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
