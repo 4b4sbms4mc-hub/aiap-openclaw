@@ -1,6 +1,10 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # Validation evidence and limits
 
+## Independent durable live witness and public identity inspection (2026-11-09)
+
+Sixteen durable-witness tests and four public-enrollment inspection tests bring scripts/tests to 139. Actual process reopening, two writers contending on the SQLite lock, stale instances, pre/post-commit exceptions, final expiry, corrupt storage and wrong/bad external signers pass. Only signed metadata and public trust persist; whole-source/witness rollback with a lost reader floor remains an explicit negative case. Public identity inspection needs no private-key files and does not return memory/token content or modify the synthetic source. NAS R2's previous 18-test observation lab passed on the operator's actual NAS; this does not deploy the durable witness or a Keychain provider. [Contracts and limits](RECOVERY_DURABLE_LIVE_WITNESS_CN.md).
+
 ## Availability-first live source observation (2026-11-09)
 
 Eighteen new isolated tests bring scripts/tests to 119 (115 recovery governance + 4 public metadata inspection). Ordinary Core writes continue without a witness; live observations bind the reader nonce, signed checkpoint pin and enrolled source identity, and cap the witness proof expiry. Offline deletion/revocation rejects the old checkpoint; a current deletion checkpoint is exercised through actual isolated restore. Read-only fixture hashes, malformed/signature/nonce/time failures, sidecar refusal and durable-reader trust checks pass. Explicit negative cases demonstrate that unseen offline changes followed by whole-source rollback and changes after observation are not prevented. No network authentication, durable independent witness, production key access or activation gate is claimed. [Availability policy and limits](RECOVERY_AVAILABILITY_CN.md).
