@@ -1,7 +1,7 @@
 {
   "id": "lavida-aiap",
   "name": "La Vida for OpenClaw",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Scoped AIAP recall, owner-reviewed proposals and optional direct-statement automatic candidates.",
   "kind": "memory",
   "categories": [

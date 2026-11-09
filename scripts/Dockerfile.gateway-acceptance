@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Synthetic CI fixture only: not a production deployment image.
+FROM node:24.22.1-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+COPY lavida/core/requirements.txt /tmp/aiap-requirements.txt
+RUN python3 -m venv /opt/aiap-venv \
+    && /opt/aiap-venv/bin/pip install --no-cache-dir -r /tmp/aiap-requirements.txt \
+    && npm install --prefix /opt/host --ignore-scripts --no-audit --no-fund openclaw@2026.9.4 \
+    && node /opt/host/node_modules/openclaw/scripts/postinstall-bundled-plugins.mjs \
+    && node /opt/host/node_modules/openclaw/openclaw.mjs --version \
+    && mkdir -p /fixture /reports /home/node/.cache && chown node:node /reports /home/node/.cache
+COPY --chown=node:node lavida /fixture/lavida
+COPY --chown=node:node scripts /fixture/scripts
+RUN /opt/aiap-venv/bin/python /fixture/scripts/package_lavida.py
+ENV PATH=/opt/aiap-venv/bin:$PATH PYTHONDONTWRITEBYTECODE=1 AIAP_TEST_ENVIRONMENT=isolated-docker
+WORKDIR /fixture
+USER node
+ENTRYPOINT ["python", "scripts/check_openclaw_gateway.py", "--openclaw-entry", "/opt/host/node_modules/openclaw/openclaw.mjs", "--output", "/reports/gateway-docker.json"]

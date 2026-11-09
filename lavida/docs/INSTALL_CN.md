@@ -1,5 +1,7 @@
 # 全新安装：先 Core，后 OpenClaw
 
+本页当前对应源码候选 0.3.5；已发布下载资产仍为 0.3.4，未被覆盖。使用本页文件名之前，先从当前源码运行 `python scripts/build_plugin.py` 与 `python scripts/package_lavida.py` 生成候选包；不要把旧下载包仅重命名成 0.3.5。
+
 这是供新用户复现的入口，不是当前 NAS 的升级或恢复指令。Python 3.12 / Docker Compose v2 为参考环境。插件自身要求 Node >=22 并支持 node:sqlite；官方 OpenClaw 2026.9.4 包的要求更高，为 Node >=24.16.0 且 <25，或 >=26.1.0。本次实际使用 Node 24.22.1。镜像构建需要访问 Python 镜像和依赖源；不提供完整离线镜像。
 
 ## 1. 单独启动 Core
@@ -63,8 +65,8 @@ docker compose exec -T core cat /data/lavida-main.json | docker exec -i --user 0
 
 ```sh
 docker network connect aiap-mvp-local openclaw
-docker cp lavida-aiap-0.3.4.tgz openclaw:/tmp/lavida-aiap-0.3.4.tgz
-docker exec openclaw openclaw plugins install /tmp/lavida-aiap-0.3.4.tgz --accept-capabilities --force
+docker cp lavida-aiap-0.3.5.tgz openclaw:/tmp/lavida-aiap-0.3.5.tgz
+docker exec openclaw openclaw plugins install /tmp/lavida-aiap-0.3.5.tgz --accept-capabilities --force
 ```
 
 这是首次安装入口。2026.9.4 对 ClawHub 之外的本地包要求明确确认来源；这里的 --force 仅在核对发布包、摘要和目标尚未安装该插件后使用，它也有覆盖能力。如果插件已经存在，不要执行这条命令，按当前版本另行安排升级。已有网络连接也不要重复执行 network connect。
@@ -76,7 +78,7 @@ docker restart -t 30 openclaw
 docker exec openclaw openclaw plugins inspect lavida-aiap --runtime --json
 ```
 
-应实际加载 0.3.4 并注册三个工具。只在绑定的 Owner 主会话调用 status，再请求 propose 一条合成偏好。候选阶段搜索不命中；在 Core CLI review/approve 后搜索应返回同一记录。
+应实际加载 0.3.5 并注册三个工具。只在绑定的 Owner 主会话调用 status，再请求 propose 一条合成偏好。候选阶段搜索不命中；在 Core CLI review/approve 后搜索应返回同一记录。
 
 当前新建 Dashboard 会话不会自动绑定。缺少可信 Owner 标记、非绑定会话或沙箱上下文不会开放工具。不要用配置绕过身份检查。
 

@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Synthetic fresh-install and stopped-snapshot restore through a real Gateway.
 
-No production configuration is read. No model, external channel or Docker is used.
-This validates the authenticated HTTP tool route, not conversational tool choice.
+No production configuration is read. External channels and Docker are not used.
+The default validates HTTP tools; --conversation-model additionally runs a real local model.
 """
 import argparse
 import hashlib
@@ -79,9 +79,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--openclaw-entry', type=Path, required=True)
     parser.add_argument('--node', default='node')
-    parser.add_argument('--release-zip', type=Path, required=True)
+    parser.add_argument('--release-zip', type=Path, help='Defaults to the current RELEASE.json candidate ZIP')
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--conversation-model', help='Optional actual local model identifier; never a mock')
+    parser.add_argument('--model-base-url', default='http://127.0.0.1:1235/v1')
     args = parser.parse_args()
+    if args.release_zip is None:
+        repo = Path(__file__).resolve().parents[1]
+        version = json.loads((repo / 'lavida/RELEASE.json').read_text())['plugin_version']
+        args.release_zip = repo / 'dist' / ('LaVida_for_OpenClaw_' + version + '.zip')
     # A failed rerun must not leave an older passing report at the requested path.
     args.output.unlink(missing_ok=True)
     entry = args.openclaw_entry.resolve(strict=True)
@@ -94,6 +100,7 @@ def main():
               'python_version': sys.version.split()[0],
               'release_sha256': hashlib.sha256(args.release_zip.read_bytes()).hexdigest(),
               'commit': os.environ.get('GITHUB_SHA'), 'checks': {},
+              'execution_environment': os.environ.get('AIAP_TEST_ENVIRONMENT', 'local-host'),
               'limits': ['No conversational model turn', 'No Docker/NAS deployment',
                          'No secure transfer or revocation-aware historical recovery guarantee']}
     checks = report['checks']
@@ -140,6 +147,8 @@ def main():
         credential_path.chmod(0o600)
         cfg = {'gateway': {'mode': 'local', 'bind': 'loopback',
                           'auth': {'mode': 'token', 'token': gateway_token}},
+               'logging': {'file': str(current / 'host/runtime.log')},
+               'update': {'checkOnStart': False},
                'agents': {'defaults': {'workspace': str(current / 'workspace')}},
                'plugins': {'entries': {}},
                'tools': {'allow': ['aiap_memory_status', 'aiap_memory_search', 'aiap_memory_propose']}}
@@ -171,6 +180,15 @@ def main():
             'avatarId': credential['avatar_id'], 'autoPropose': {'enabled': False},
             'bindings': {'main': {'spaceRef': 'space:general', 'credentialFile': str(credential_path),
                 'purpose': 'lavida-memory', 'runtimeRef': 'openclaw-main', 'sessionKeys': ['agent:main:main']}}}}
+        conversation_expected = None
+        if args.conversation_model:
+            from conversation_probe import configure
+            configure(cfg, args.conversation_model, args.model_base_url)
+            report['conversation_model'] = args.conversation_model
+            report['conversation_prompt_language'] = 'zh-CN'
+            report['limits'][0] = 'Conversation evidence applies only to this tested local model/configuration'
+        if report['execution_environment'] == 'isolated-docker':
+            report['limits'][1] = 'One-container synthetic Docker fixture; no production/NAS deployment'
         fresh_expected = None
         for phase in ('fresh', 'restored'):
             core_port, gateway_port = port(), port()
@@ -240,6 +258,10 @@ def main():
                         for excluded in ('AIAP_PENDING', 'AIAP_REJECTED', 'AIAP_PRIVATE_LIFE'):
                             require(not invoke('search', {'query': excluded})['results'], 'excluded content recalled')
                         checks['fresh_pending_rejected_and_space_isolation'] = True
+                    if args.conversation_model:
+                        from conversation_probe import run
+                        conversation_expected = run(phase, gateway_base, gateway_token, client,
+                            current / 'core', credential, checks, conversation_expected, require)
                 finally:
                     stop(gateway_process)
                     stop(core_process)
