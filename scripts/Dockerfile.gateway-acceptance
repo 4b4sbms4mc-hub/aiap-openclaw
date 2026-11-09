@@ -9,7 +9,7 @@ RUN python3 -m venv /opt/aiap-venv \
     && npm install --prefix /opt/host --ignore-scripts --no-audit --no-fund openclaw@2026.9.4 \
     && node /opt/host/node_modules/openclaw/scripts/postinstall-bundled-plugins.mjs \
     && node /opt/host/node_modules/openclaw/openclaw.mjs --version \
-    && mkdir -p /fixture /reports && chown node:node /reports
+    && mkdir -p /fixture /reports /home/node/.cache && chown node:node /reports /home/node/.cache
 COPY --chown=node:node lavida /fixture/lavida
 COPY --chown=node:node scripts /fixture/scripts
 RUN /opt/aiap-venv/bin/python /fixture/scripts/package_lavida.py

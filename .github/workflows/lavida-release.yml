@@ -60,7 +60,7 @@ jobs:
         run: docker build -f scripts/Dockerfile.gateway-acceptance -t aiap-gateway-acceptance .
       - name: Verify fresh Gateway and restored tool calls inside Docker without external network
         run: |
-          docker create --name aiap-gateway-acceptance --network none --read-only --tmpfs /tmp:rw,nosuid,mode=1777,size=256m --tmpfs /reports:rw,nosuid,mode=1777,size=8m --cap-drop ALL --security-opt no-new-privileges --env GITHUB_SHA="$GITHUB_SHA" aiap-gateway-acceptance
+          docker create --name aiap-gateway-acceptance --network none --read-only --tmpfs /tmp:rw,nosuid,mode=1777,size=256m --tmpfs /home/node/.cache:rw,nosuid,uid=1000,gid=1000,mode=700,size=128m --tmpfs /reports:rw,nosuid,mode=1777,size=8m --cap-drop ALL --security-opt no-new-privileges --env GITHUB_SHA="$GITHUB_SHA" aiap-gateway-acceptance
           docker start -a aiap-gateway-acceptance
           test "$(docker inspect --format '{{.State.ExitCode}}' aiap-gateway-acceptance)" = 0
       - name: Remove synthetic Gateway container and image

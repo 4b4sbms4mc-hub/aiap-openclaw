@@ -11,6 +11,7 @@
 docker build -f scripts/Dockerfile.gateway-acceptance -t aiap-gateway-acceptance .
 docker create --name aiap-gateway-acceptance --network none --read-only \
   --tmpfs /tmp:rw,nosuid,mode=1777,size=256m \
+  --tmpfs /home/node/.cache:rw,nosuid,uid=1000,gid=1000,mode=700,size=128m \
   --tmpfs /reports:rw,nosuid,mode=1777,size=8m \
   --cap-drop ALL --security-opt no-new-privileges aiap-gateway-acceptance
 docker start -a aiap-gateway-acceptance
