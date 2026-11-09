@@ -1,6 +1,10 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # Validation evidence and limits
 
+## Availability-first live source observation (2026-11-09)
+
+Eighteen new isolated tests bring scripts/tests to 119 (115 recovery governance + 4 public metadata inspection). Ordinary Core writes continue without a witness; live observations bind the reader nonce, signed checkpoint pin and enrolled source identity, and cap the witness proof expiry. Offline deletion/revocation rejects the old checkpoint; a current deletion checkpoint is exercised through actual isolated restore. Read-only fixture hashes, malformed/signature/nonce/time failures, sidecar refusal and durable-reader trust checks pass. Explicit negative cases demonstrate that unseen offline changes followed by whole-source rollback and changes after observation are not prevented. No network authentication, durable independent witness, production key access or activation gate is claimed. [Availability policy and limits](RECOVERY_AVAILABILITY_CN.md).
+
 ## Read-only NAS/Mac readiness collector (2026-11-09)
 
 The collector and literal SQLite-prefix regressions bring scripts/tests coverage to 101 (97 recovery governance + 4 metadata privacy/read-only tests). Internal objects are excluded by a literal sqlite_ prefix; lookalike custom tables are included in fingerprints and refused by recovery/reader schema checks. Known public files only are fingerprinted; synthetic source files remain unchanged, application markers/tokens are absent, missing DBs are not created and symlinks are refused. Actual deployment paths and reports remain private. No cross-device service or production modification is claimed. [Collector and readiness boundaries](NAS_MAC_READINESS_CN.md).

@@ -40,7 +40,7 @@ A local-only [source transaction gate experiment](lavida/docs/RECOVERY_SOURCE_GA
 
 The [renewal and control-loss review experiment](lavida/docs/RECOVERY_RENEWAL_LOSS_CN.md) adds 22 tests (96 recovery-governance total): explicit source-checked checkpoint renewal and read-only owner-review evidence after control loss. It never automatically re-enrolls a lost witness or grants activation; independent deployment inputs remain unconfirmed.
 
-A [read-only NAS/Mac readiness collector](lavida/docs/NAS_MAC_READINESS_CN.md) fingerprints only known public code/Schema and SQLite schema metadata, with 4 privacy/read-only tests (101 tests in scripts/tests total). It does not deploy a cross-device witness or inspect memory/credential rows.
+A [read-only NAS/Mac readiness collector](lavida/docs/NAS_MAC_READINESS_CN.md) fingerprints only known public code/Schema and SQLite schema metadata, with 4 privacy/read-only tests. The [availability-first recovery experiment](lavida/docs/RECOVERY_AVAILABILITY_CN.md) adds 18 tests: ordinary Core writes continue without the witness, while recovery selection requires a nonce-bound live-source observation. The 119 scripts/tests include explicit negative cases for unseen offline source rollback and changes after observation. No cross-device service is deployed.
 
 ## Legacy v0.3.0 bundle
 
