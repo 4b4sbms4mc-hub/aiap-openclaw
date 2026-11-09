@@ -42,6 +42,8 @@ The [renewal and control-loss review experiment](lavida/docs/RECOVERY_RENEWAL_LO
 
 A [read-only NAS/Mac readiness collector](lavida/docs/NAS_MAC_READINESS_CN.md) fingerprints only known public code/Schema and SQLite schema metadata, with 4 privacy/read-only tests. The [availability-first recovery experiment](lavida/docs/RECOVERY_AVAILABILITY_CN.md) adds 18 tests: ordinary Core writes continue without the witness, while recovery selection requires a nonce-bound live-source observation. The 119 scripts/tests include explicit negative cases for unseen offline source rollback and changes after observation. No cross-device service is deployed.
 
+The [independent durable witness experiment](lavida/docs/RECOVERY_DURABLE_LIVE_WITNESS_CN.md) adds 16 persistence/signing/transaction tests and 4 read-only public enrollment tests (139 scripts/tests total). Signer custody is external, keys are not stored in the witness database, and a new response requires live source evidence. No production Keychain signer, network service or activation gate is claimed.
+
 ## Legacy v0.3.0 bundle
 
 The existing root `plugin.json`, `mcp.json`, `bin/`, `skills/` and embedded `aiap-core/` remain the legacy protocol-validation bundle. Its MCP tools are `aiap_validate_identity`, `aiap_validate_transfer` and `aiap_inspect_avatar`; these do not provide the La Vida persistent-memory interface.
