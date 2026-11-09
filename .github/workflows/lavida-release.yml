@@ -77,8 +77,15 @@ jobs:
           docker compose -f lavida/compose.yaml up -d
       - name: Verify fresh approval/recall and restart persistence
         run: python scripts/check_fresh_core.py
-      - name: Verify NAS observation lab with an isolated existing Core image
-        run: sh scripts/run_nas_observation_lab.sh aiap-mvp-core-service:0.2.0
+      - name: Verify NAS observation lab with restricted source permissions
+        run: |
+          lab=$(mktemp -d)
+          trap 'rm -rf -- "$lab"' EXIT
+          mkdir -p "$lab/lavida"
+          cp -R scripts "$lab/scripts"
+          cp -R lavida/core "$lab/lavida/core"
+          chmod -R go-rwx "$lab"
+          sh "$lab/scripts/run_nas_observation_lab.sh" aiap-mvp-core-service:0.2.0
       - name: Remove synthetic CI containers and volume
         if: always()
         run: docker compose -f lavida/compose.yaml down -v
