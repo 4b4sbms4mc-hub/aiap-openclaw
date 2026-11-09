@@ -11,10 +11,11 @@ from recovery_guard import Fault, require, strict_json
 from ssh_transport_probe import PROFILE
 
 
-def exchange(arguments, nonce, expected_uid, timeout=10):
+def exchange(arguments, nonce, expected_uid, timeout=10, *, expected_rejection=False):
     require(isinstance(nonce, str) and re.fullmatch('[0-9a-f]{64}', nonce) is not None,
             'E_SSH_PROBE_REQUEST')
-    require(type(expected_uid) is int and expected_uid > 0 and 0 < timeout <= 15,
+    require(type(expected_uid) is int and expected_uid > 0 and 0 < timeout <= 15
+            and type(expected_rejection) is bool,
             'E_SSH_PROBE_REQUEST')
     raw=json.dumps(dict(profile=PROFILE, op='probe', nonce=nonce)).encode()
     process=None
@@ -35,9 +36,12 @@ def exchange(arguments, nonce, expected_uid, timeout=10):
                     else:
                         result.extend(part)
                         require(len(result)<=2048, 'E_SSH_PROBE_TRANSPORT')
-        require(process.wait(timeout=max(0.001, deadline-time.monotonic()))==0,
-                'E_SSH_PROBE_TRANSPORT')
+        returncode=process.wait(timeout=max(0.001, deadline-time.monotonic()))
         data=strict_json(bytes(result))
+        if expected_rejection:
+            require(returncode==2 and data=={'error':'E_PROBE_REQUEST'},'E_SSH_PROBE_RESPONSE')
+            return data
+        require(returncode==0,'E_SSH_PROBE_TRANSPORT')
         require(isinstance(data,dict) and set(data)=={'profile','nonce','uid',
                 'source_observation_available'} and data['profile']==PROFILE
                 and data['nonce']==nonce and type(data['uid']) is int

@@ -34,5 +34,13 @@ class SSHProbeClientTests(unittest.TestCase):
             exchange(self.child('import sys;sys.stdin.read();print("PRIVATE_SENTINEL");sys.exit(2)'), 'a'*64,10002)
         self.assertNotIn('PRIVATE_SENTINEL',str(context.exception))
 
+    def test_negative_acceptance_requires_exact_rejection_and_exit_code(self):
+        denied=self.child('import sys;sys.stdin.read();print(\'{"error":"E_PROBE_REQUEST"}\');sys.exit(2)')
+        self.assertEqual(exchange(denied,'a'*64,10002,expected_rejection=True),{'error':'E_PROBE_REQUEST'})
+        for script in ['import sys;sys.stdin.read();print(\'{"error":"E_PROBE_REQUEST"}\')',
+                       'import sys;sys.stdin.read();print("uid=10002");sys.exit(2)']:
+            with self.assertRaises(Fault):
+                exchange(self.child(script),'a'*64,10002,expected_rejection=True)
+
 
 if __name__=='__main__':unittest.main()
