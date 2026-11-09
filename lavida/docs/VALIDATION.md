@@ -1,6 +1,10 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # Validation evidence and limits
 
+## Experimental old-snapshot governance (2026-11-09)
+
+Seventeen local development tests passed for `scripts/recovery_guard.py`, including a real CLI restore followed by a new HTTP Core process. Current pinned checkpoint tombstones and exact record manifests exclude deleted/stale data; all old grants are revoked and fresh credentials are required. Source snapshots remain unchanged and failed restores never activate a partial directory. [Trust assumptions, bounds and reproduction](RECOVERY_GOVERNANCE_CN.md). This helper is not a production Core API or remote transfer implementation; the operator must independently establish current checkpoint freshness.
+
 ## Real Gateway fresh install and isolated restore (2026-11-09)
 
 Codex executed `scripts/check_openclaw_gateway.py` with the packaged release ZIP, official OpenClaw 2026.9.4, Node 24.22.1 and Python 3.12.14 on macOS. Real Gateway HTTP tools exercised archive installation, pending/approved/rejected handling, fixed-space isolation, wrong-token/unbound-session rejection, stopped-snapshot checksums/SQLite integrity, original-state isolation, restored identity/memory/revision/local-signature continuity, and a new proposal/approval/recall after restore. Generated private state and processes were removed.

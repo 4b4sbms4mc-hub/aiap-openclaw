@@ -30,6 +30,8 @@ The [latest protocol design drafts](https://github.com/4b4sbms4mc-hub/ai-avatar-
 
 Multi-member Bundle/Shared Space, organization management, secure cross-runtime transfer, a general MCP memory server and full workflow execution are future work. This release does not claim full AIAP compliance.
 
+An experimental repository-only [old-snapshot recovery governance tool](lavida/docs/RECOVERY_GOVERNANCE_CN.md) applies an independently pinned current local checkpoint, excludes deleted/stale records, and revokes all old credentials. Its 17 isolated tests do not establish checkpoint freshness by themselves, production/NAS recovery or secure transfer. Core Service and plugin behavior versions are unchanged by this development helper.
+
 ## Legacy v0.3.0 bundle
 
 The existing root `plugin.json`, `mcp.json`, `bin/`, `skills/` and embedded `aiap-core/` remain the legacy protocol-validation bundle. Its MCP tools are `aiap_validate_identity`, `aiap_validate_transfer` and `aiap_inspect_avatar`; these do not provide the La Vida persistent-memory interface.
