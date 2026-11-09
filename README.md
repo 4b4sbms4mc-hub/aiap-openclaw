@@ -63,3 +63,5 @@ AIAP protocol, whitepaper, Core Service, plugin and legacy-bundle versions are i
 Code, schemas, examples and tests: Apache-2.0.
 Whitepapers, specifications and prose documentation: CC BY 4.0.
 Existing [license map](LICENSE), [open-standard policy](OPEN-STANDARD-POLICY.md), [IP policy](IP-POLICY.md) and [trademark policy](TRADEMARK.md) remain in force.
+
+When `sshd -G` is unavailable, a [static configuration inventory](lavida/docs/NAS_ACCESS_PREFLIGHT_CN.md#静态文本补查) filters configuration text without starting sshd or testing host keys. Four new tests bring scripts/tests to 167; this inventory does not establish effective settings.

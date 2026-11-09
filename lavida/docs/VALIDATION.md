@@ -1,6 +1,10 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # Validation evidence and limits
 
+## Static SSH configuration text inventory (2026-11-10)
+
+Four tests bring scripts/tests to 167. `inspect_sshd_config_static.awk` filters stdin only, preserving selected values and multiple paths while redacting executable command arguments and ignoring environment/private-key material. Tests cover whitespace/equals/case, quoted comments, Include/Match as unevaluated references, control characters and line bounds. The operator's real NAS access preflight completed without configuration changes, but its `sshd -G` probe was unavailable; no exact cause/version or effective authorization path is inferred. Static follow-up is still required before the restricted installer can be finalized.
+
 ## Read-only NAS access inventory (2026-11-10)
 
 Four tests bring scripts/tests to 163. Synthetic command fixtures verify filtered SSH/account/container metadata, unchanged account files, sensitive-value redaction, input rejection, symlink reporting, and refusal to fall back from unsupported `sshd -G` to host-key tests. These tests do not inspect a real NAS. Effective running-daemon configuration is not established by a default-config parse; operator metadata is still needed. [Scope and operator use](NAS_ACCESS_PREFLIGHT_CN.md).
