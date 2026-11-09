@@ -1,6 +1,10 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # Validation evidence and limits
 
+## Checkpoint renewal and control-loss review (2026-11-09)
+
+Ten renewal and twelve read-only review tests bring recovery-governance coverage to 96. Expired checkpoint renewal preserves source bytes and grants; strict sequence contention and child SIGKILL boundaries pass. Loss reports compare signed source snapshots with independently retained reader heads but never re-enroll or authorize activation. [Contracts, limits and deployment decisions](RECOVERY_RENEWAL_LOSS_CN.md).
+
 ## Local source transaction gate experiment (2026-11-09)
 
 Twenty source-gate tests bring recovery governance coverage to 74. Actual source transactions, persistent pending/head/key, four child SIGKILL boundaries, two-process writers and a durable-reader-to-isolated-restore flow pass. Production Service/HTTP are unchanged; whole source/control rollback and post-proof races from bypass writers remain explicit limits. [Ordering and failure semantics](RECOVERY_SOURCE_GATE_CN.md).
