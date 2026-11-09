@@ -44,6 +44,8 @@ A [read-only NAS/Mac readiness collector](lavida/docs/NAS_MAC_READINESS_CN.md) f
 
 The [independent durable witness experiment](lavida/docs/RECOVERY_DURABLE_LIVE_WITNESS_CN.md) adds 16 persistence/signing/transaction tests and 4 read-only public enrollment tests (139 scripts/tests total). Signer custody is external, keys are not stored in the witness database, and a new response requires live source evidence. No production Keychain signer, network service or activation gate is claimed.
 
+A [create-only Mac Keychain signer](lavida/docs/MAC_KEYCHAIN_SIGNER_CN.md) adds 10 tests (149 scripts/tests total). Its default CLI prints a public plan; actual credential creation requires an explicit action, refuses duplicates and returns only public metadata. Native read-only probing has passed on Mac; real provisioning remains pending scoped confirmation. No network service or activation is enabled.
+
 ## Legacy v0.3.0 bundle
 
 The existing root `plugin.json`, `mcp.json`, `bin/`, `skills/` and embedded `aiap-core/` remain the legacy protocol-validation bundle. Its MCP tools are `aiap_validate_identity`, `aiap_validate_transfer` and `aiap_inspect_avatar`; these do not provide the La Vida persistent-memory interface.
