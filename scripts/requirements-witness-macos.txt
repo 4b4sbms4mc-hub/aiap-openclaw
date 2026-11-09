@@ -1,0 +1,2 @@
+# Optional Mac witness signer only. Does not change Core/plugin dependencies.
+keyring==25.7.0

@@ -1,6 +1,10 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # Validation evidence and limits
 
+## Create-only Mac Keychain signer preparation (2026-11-09)
+
+Ten new tests bring scripts/tests to 149. In-memory-store tests cover confirmation, duplicate preservation, binding/secret corruption, unavailable/missing items, signature domains and integration with the durable witness transaction. A native-status fixture checks duplicate SecItemAdd rejection without delete/update. The actual Mac passed an exact-service, random nonexistent-item query/read/release probe with no writes. Actual system credential creation, access policy and post-create self-test remain pending explicit scoped confirmation; they are not claimed by mock tests or CI. [Provisioning scope and limits](MAC_KEYCHAIN_SIGNER_CN.md).
+
 ## Independent durable live witness and public identity inspection (2026-11-09)
 
 Sixteen durable-witness tests and four public-enrollment inspection tests bring scripts/tests to 139. Actual process reopening, two writers contending on the SQLite lock, stale instances, pre/post-commit exceptions, final expiry, corrupt storage and wrong/bad external signers pass. Only signed metadata and public trust persist; whole-source/witness rollback with a lost reader floor remains an explicit negative case. Public identity inspection needs no private-key files and does not return memory/token content or modify the synthetic source. NAS R2's previous 18-test observation lab passed on the operator's actual NAS; this does not deploy the durable witness or a Keychain provider. [Contracts and limits](RECOVERY_DURABLE_LIVE_WITNESS_CN.md).
