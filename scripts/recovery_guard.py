@@ -270,7 +270,8 @@ def restore_snapshot(snapshot_dir, checkpoint, expected_sha256, target_dir, cloc
                   'trust': 'operator-pinned checkpoint at capture time; no live revocation synchronization',
                   'fresh_owner_credential_file': 'owner-credentials.json'}
         save_private(stage / 'recovery-report.json', canonical(report))
-        require((clock or (lambda: datetime.now(timezone.utc)))() < parse(payload['expires_at']), 'E_EXPIRED')
+        activated_at = (clock or (lambda: datetime.now(timezone.utc)))()
+        require(parse(payload['issued_at']) <= activated_at < parse(payload['expires_at']), 'E_EXPIRED')
         require(target.stat().st_ino == reservation and not list(target.iterdir()), 'E_OUTPUT_EXISTS')
         os.replace(stage, target)
         stage = None

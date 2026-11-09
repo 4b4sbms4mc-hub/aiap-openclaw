@@ -2,7 +2,9 @@
 from datetime import datetime, timezone, timedelta
 import hashlib
 import json
+import os
 from pathlib import Path
+import selectors
 import shutil
 import sqlite3
 import socket
@@ -10,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from recovery_guard import export_checkpoint, restore_snapshot
@@ -238,6 +241,113 @@ class RecoveryTests(unittest.TestCase):
         times = iter([self.now, self.now + timedelta(hours=2)])
         self.reject('E_EXPIRED', clock=lambda: next(times))
         self.assertFalse(list(self.root.glob('.aiap-recovery-*')))
+
+    def test_clock_rollback_during_restore_never_publishes_destination(self):
+        times = iter([self.now, self.now - timedelta(minutes=1)])
+        self.reject('E_EXPIRED', clock=lambda: next(times))
+        self.assertFalse(list(self.root.glob('.aiap-recovery-*')))
+
+    def test_publication_io_failure_cleans_private_stage_and_reservation(self):
+        with patch('recovery_guard.os.replace', side_effect=OSError('INJECTED_PUBLICATION_FAILURE')):
+            with self.assertRaises(OSError):
+                self.restore()
+        self.assertFalse(self.target.exists())
+        self.assertFalse(list(self.root.glob('.aiap-recovery-*')))
+        self.assertEqual(self.hashes(self.snapshot), self.original_files)
+
+    def test_valid_older_checkpoint_demonstrates_external_freshness_requirement(self):
+        # Deliberately supply a stale but valid pin. This is a limitation test,
+        # not an assertion that resurrecting a subsequently deleted record is safe.
+        report = self.restore(checkpoint=self.older_checkpoint, expected_sha256=self.older_pin)
+        self.assertEqual(report['restored_objects'], 3)
+        self.assertEqual(report['restore_guarantee'], 'complete-for-current-memory-index')
+        owner = json.loads((self.target / 'owner-credentials.json').read_text())['token']
+        recovered = Service(self.target, clock=lambda: self.now)
+        rows = recovered.search(owner, {'space_refs': ['space:general'],
+            'purpose': 'owner-maintenance', 'query': ''})['items']
+        self.assertIn(self.deleted, {row['memory_id'] for row in rows})
+        # The genuine current checkpoint contains a tombstone; the old one does not.
+        current = json.loads(self.checkpoint.read_text())['payload']
+        self.assertIn(self.deleted, {row['id'] for row in current['tombstones']})
+        self.assertEqual(self.hashes(self.snapshot), self.original_files)
+
+    def test_concurrent_destination_content_is_preserved(self):
+        def interfere():
+            (self.target / 'concurrent.txt').write_text('KEEP_CONCURRENT_DATA')
+            return self.now
+        times = iter([self.now, None])
+        def clock():
+            return self.now if next(times) is not None else interfere()
+        with self.assertRaises(Fault) as error:
+            self.restore(clock=clock)
+        self.assertEqual(error.exception.code, 'E_OUTPUT_EXISTS')
+        self.assertEqual((self.target / 'concurrent.txt').read_text(), 'KEEP_CONCURRENT_DATA')
+        self.assertEqual(list(self.target.iterdir()), [self.target / 'concurrent.txt'])
+        self.assertFalse(list(self.root.glob('.aiap-recovery-*')))
+        self.assertEqual(self.hashes(self.snapshot), self.original_files)
+
+    @unittest.skipUnless(os.name == 'posix', 'requires POSIX process kill and pipe readiness')
+    def test_sigkill_around_publication_has_explicit_recovery_outcomes(self):
+        # Pause at a deterministic barrier; kill a real child process, bypassing finally.
+        script = '''
+import sys, time
+from datetime import datetime
+sys.path.insert(0, sys.argv[1])
+import recovery_guard as guard
+original = guard.os.replace
+def barrier(source, target):
+    if sys.argv[6] == 'after':
+        original(source, target)
+    print('AT_PUBLICATION_BARRIER', flush=True)
+    while True:
+        time.sleep(1)
+guard.os.replace = barrier
+guard.restore_snapshot(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5],
+                       clock=lambda: datetime.fromisoformat(sys.argv[7]))
+'''
+        for phase in ('before', 'after'):
+            with self.subTest(phase=phase):
+                target = self.root / ('killed-' + phase)
+                process = subprocess.Popen([sys.executable, '-c', script,
+                    str(Path(__file__).resolve().parents[1]), str(self.snapshot),
+                    str(self.checkpoint), self.pin, str(target), phase, self.now.isoformat()],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                try:
+                    with selectors.DefaultSelector() as selector:
+                        selector.register(process.stdout, selectors.EVENT_READ)
+                        self.assertTrue(selector.select(timeout=15), 'child did not reach publication')
+                    self.assertEqual(process.stdout.readline().strip(), 'AT_PUBLICATION_BARRIER')
+                    process.kill()
+                    process.communicate(timeout=5)
+                    self.assertLess(process.returncode, 0)
+                    self.assertEqual(target.stat().st_mode & 0o777, 0o700)
+                    stages = list(self.root.glob('.aiap-recovery-*'))
+                    if phase == 'before':
+                        self.assertEqual(list(target.iterdir()), [])
+                        self.assertEqual(len(stages), 1)
+                        self.assertEqual(stages[0].stat().st_mode & 0o777, 0o700)
+                        with self.assertRaises(Fault) as error:
+                            self.restore(target_dir=target)
+                        self.assertEqual(error.exception.code, 'E_OUTPUT_EXISTS')
+                        # Only remove this test's private residue after its child has stopped.
+                        shutil.rmtree(stages[0])
+                        target.rmdir()
+                        self.assertEqual(self.restore(target_dir=target)['restored_objects'], 1)
+                    else:
+                        self.assertEqual(stages, [])
+                    owner = json.loads((target / 'owner-credentials.json').read_text())['token']
+                    recovered = Service(target, clock=lambda: self.now)
+                    rows = recovered.search(owner, {'space_refs': ['space:general'],
+                        'purpose': 'owner-maintenance', 'query': ''})['items']
+                    self.assertEqual([row['memory_id'] for row in rows], [self.keep])
+                    for token in (self.owner, self.adapter['token']):
+                        with self.assertRaises(Fault):
+                            recovered.session(token)
+                    self.assertEqual(self.hashes(self.snapshot), self.original_files)
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate(timeout=5)
 
 
 if __name__ == '__main__':
