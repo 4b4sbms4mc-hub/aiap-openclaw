@@ -1,2 +1,2 @@
-# Optional Mac witness signer only. Does not change Core/plugin dependencies.
+# Optional Mac witness/SSH identity custody only; no Core/plugin dependency change.
 keyring==25.7.0

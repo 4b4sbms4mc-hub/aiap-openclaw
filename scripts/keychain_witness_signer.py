@@ -42,6 +42,7 @@ def public_plan(binding):
 
 class NativeKeychain:
     """Pinned native bindings, exact service, atomic SecItemAdd; no delete/update."""
+    allowed_service=SERVICE
     def __init__(self):
         require(sys.platform=='darwin','E_KEYCHAIN_PLATFORM')
         try:
@@ -74,7 +75,7 @@ class NativeKeychain:
             for value in owned:self.release(value)
 
     def get(self, service, account):
-        require(service==SERVICE,'E_KEYCHAIN_SCOPE')
+        require(service==self.allowed_service,'E_KEYCHAIN_SCOPE')
         a=self.api
         query=self._query(kSecClass=a.k_('kSecClassGenericPassword'),kSecAttrService=service,
             kSecAttrAccount=account,kSecReturnData=True,kSecMatchLimit=a.k_('kSecMatchLimitOne'),
@@ -92,7 +93,7 @@ class NativeKeychain:
             self.release(query)
 
     def create(self, service, account, value):
-        require(service==SERVICE and isinstance(value,str),'E_KEYCHAIN_SCOPE')
+        require(service==self.allowed_service and isinstance(value,str),'E_KEYCHAIN_SCOPE')
         raw=value.encode('utf-8');require(len(raw)<=8192,'E_KEYCHAIN_RECORD')
         buffer=ctypes.create_string_buffer(raw)
         data=self.data_create(None,ctypes.cast(buffer,ctypes.c_void_p),len(raw))
