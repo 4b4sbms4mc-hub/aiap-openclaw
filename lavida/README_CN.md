@@ -28,7 +28,7 @@
 ## 使用和发布
 
 1. [全新安装及闭环演示](docs/INSTALL_CN.md)：新建独立数据，不操作现有 NAS 数据卷。
-2. [验证范围](docs/VALIDATION.md)：区分本地测试、既有 NAS 实测与新安装待测。
+2. [验证范围](docs/VALIDATION.md)：区分真实 Gateway HTTP 新安装/恢复、本地测试、既有 NAS 实测与 Docker/NAS 待测。
 3. [Release 说明草稿](docs/RELEASE_NOTES.md)：使用独立 tag `lavida-openclaw-v0.3.4`，避免覆盖协议 `v0.3.0`。
 4. [许可范围](LICENSE_SCOPE.md)：代码 Apache-2.0，文档 CC BY 4.0，保留原有商标政策。
 

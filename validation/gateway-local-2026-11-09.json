@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "openclaw_version": "2026.9.4",
+  "node_version": "v24.22.1",
+  "python_version": "3.12.14",
+  "release_sha256": "1376786b107805062b6f593be4def80701dd1482383663efd9cd5f1fdd75b106",
+  "commit": null,
+  "checks": {
+    "release_checksums": true,
+    "fresh_archive_install": true,
+    "fresh_gateway_auth_and_session": true,
+    "fresh_propose_owner_approve_recall": true,
+    "fresh_pending_rejected_and_space_isolation": true,
+    "stopped_snapshot_checksums_and_sqlite": true,
+    "original_state_offline_during_restore": true,
+    "restored_gateway_auth_and_session": true,
+    "restored_gateway_recall": true,
+    "restored_local_signature": true,
+    "restored_propose_owner_approve_recall": true,
+    "temporary_processes_stopped": true
+  },
+  "limits": [
+    "No conversational model turn",
+    "No Docker/NAS deployment",
+    "No secure transfer or revocation-aware historical recovery guarantee"
+  ],
+  "core_version": "0.2.0",
+  "plugin_version": "0.3.4",
+  "temporary_state_removed": true,
+  "status": "passed"
+}
