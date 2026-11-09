@@ -38,6 +38,8 @@ The [persistent reader experiment](lavida/docs/RECOVERY_HIGHWATER_CN.md) adds 16
 
 A local-only [source transaction gate experiment](lavida/docs/RECOVERY_SOURCE_GATE_CN.md) adds 20 tests for persisting pending before source commit, publishing checkpoints afterward, restart recovery and concurrent gated writers. Existing production Service/HTTP entry points do not use this gate; whole-store rollback and cross-device trust remain outside its guarantee.
 
+The [renewal and control-loss review experiment](lavida/docs/RECOVERY_RENEWAL_LOSS_CN.md) adds 22 tests (96 recovery-governance total): explicit source-checked checkpoint renewal and read-only owner-review evidence after control loss. It never automatically re-enrolls a lost witness or grants activation; independent deployment inputs remain unconfirmed.
+
 ## Legacy v0.3.0 bundle
 
 The existing root `plugin.json`, `mcp.json`, `bin/`, `skills/` and embedded `aiap-core/` remain the legacy protocol-validation bundle. Its MCP tools are `aiap_validate_identity`, `aiap_validate_transfer` and `aiap_inspect_avatar`; these do not provide the La Vida persistent-memory interface.

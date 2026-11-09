@@ -12,7 +12,7 @@ import secrets
 import tempfile
 
 from recovery_guard import (Service, canonical, digest, b64, unb64, read_file,
-                            strict_json, require, Fault, export_checkpoint, load_checkpoint)
+                            strict_json, require, Fault, export_checkpoint, load_checkpoint, parse)
 from recovery_highwater import private_path
 from recovery_witness import SyntheticWitness, monotonic_head, hex_digest, PROFILE
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -135,7 +135,7 @@ class SourceGate:
     def _event(self, phase):
         """Deterministic fault barrier, overridden only by isolated tests."""
 
-    def _publish_current(self, w):
+    def _publish_current(self, w, expected_governance=None):
         require(w._pending is not None, 'E_WITNESS_PENDING')
         path = self.directory / ('checkpoint-' + secrets.token_hex(32) + '.json')
         try:
@@ -147,9 +147,15 @@ class SourceGate:
             if path.exists():
                 path.unlink()
         self._event('checkpoint_exported')
-        # The checkpoint comes only from the actual committed source, never a retry caller.
-        w.publish(w._pending, fixed, pin)
-        self._save(w, fixed.name)
+        payload, _ = load_checkpoint(fixed, pin, self.clock())
+        captured = digest({k: payload[k] for k in ('core', 'spaces', 'tombstones', 'revocation_epoch')})
+        # Keep the source SQLite writer lock through head publication, so a
+        # checkpoint captured before an intervening source change cannot publish.
+        with Service(self.source, clock=self.clock).tx() as db:
+            require(bound_digest(db, w) == captured, 'E_SOURCE_DIVERGED')
+            require(expected_governance is None or captured == expected_governance, 'E_SOURCE_DIVERGED')
+            w.publish(w._pending, fixed, pin)
+            self._save(w, fixed.name)
         self._event('head_published')
         return w.head
 
@@ -166,6 +172,32 @@ class SourceGate:
                 require(bound_digest(db, w) == w.head['governance_sha256'], 'E_SOURCE_DIVERGED')
                 load_checkpoint(self.directory / name, w.head['checkpoint_sha256'], self.clock())
                 return w.answer(nonce)
+
+    def refresh(self, expected_sequence):
+        """Explicit renewal from an unchanged live source, not a backup TTL rewrite."""
+        with self._lock():
+            w, name = self._load()
+            require(w._pending is None, 'E_WITNESS_PENDING')
+            require(type(expected_sequence) is int and expected_sequence == w.head['sequence'],
+                    'E_WITNESS_SEQUENCE')
+            head = w.head
+            require(self.clock() >= parse(head['checkpoint_issued_at']), 'E_EXPIRED')
+            # Expired historical evidence still authenticates the old selected state.
+            payload, _ = load_checkpoint(self.directory / name, head['checkpoint_sha256'],
+                                         parse(head['checkpoint_issued_at']))
+            require(digest(payload['enrollment']) == w.enrollment_sha256
+                    and digest({k: payload[k] for k in
+                        ('core', 'spaces', 'tombstones', 'revocation_epoch')}) == head['governance_sha256']
+                    and payload['core']['revision'] == head['core_revision']
+                    and payload['revocation_epoch'] == head['revocation_epoch']
+                    and payload['issued_at'] == head['checkpoint_issued_at']
+                    and payload['expires_at'] == head['checkpoint_expires_at'], 'E_INTEGRITY')
+            with Service(self.source, clock=self.clock).tx() as db:
+                require(bound_digest(db, w) == head['governance_sha256'], 'E_SOURCE_DIVERGED')
+            w.begin_update(head['sequence'])
+            self._save(w, name)
+            self._event('refresh_pending_saved')
+            return self._publish_current(w, expected_governance=head['governance_sha256'])
 
     def resync(self):
         """Explicit recovery after uncertain outcome; never repeats the source mutation."""
