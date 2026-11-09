@@ -170,6 +170,12 @@ class RecoveryTests(unittest.TestCase):
             db.execute('UPDATE memories SET body=? WHERE id=?', (json.dumps(body), self.keep))
         self.reject('E_INTEGRITY')
 
+    def test_sqlite_lookalike_table_is_not_hidden_by_internal_name_filter(self):
+        with sqlite3.connect(self.snapshot / 'core.sqlite3') as db:
+            db.execute('CREATE TABLE sqliteXextra(secret TEXT)')
+            db.execute("INSERT INTO sqliteXextra VALUES('PRIVATE_EXTRA_MUST_NOT_RESTORE')")
+        self.reject('E_OPERATION_UNSUPPORTED')
+
     def test_unknown_schema_is_rejected(self):
         with sqlite3.connect(self.snapshot / 'core.sqlite3') as db:
             db.execute('CREATE TABLE unexpected(secret TEXT)')

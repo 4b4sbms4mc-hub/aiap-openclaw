@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import json
+import sqlite3
 from pathlib import Path
 import sys
 import tempfile
@@ -48,6 +49,18 @@ class PublicInspectionTests(unittest.TestCase):
             (package / 'service.py').symlink_to(package / 'private_config.py')
             with self.assertRaises(ValueError):
                 inspect(package, root / 'missing')
+
+    def test_sqlite_lookalike_table_changes_schema_fingerprint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data = Path(tmp) / 'data'
+            Service(data).initialize()
+            package = Path(__file__).resolve().parents[2] / 'lavida/core/aiap_core'
+            before = inspect(package, data)
+            with sqlite3.connect(data / 'core.sqlite3') as db:
+                db.execute('CREATE TABLE sqliteXextra(secret TEXT)')
+            after = inspect(package, data)
+            self.assertEqual(after['schema_object_count'], before['schema_object_count'] + 1)
+            self.assertNotEqual(after['schema_sha256'], before['schema_sha256'])
 
     def test_missing_database_not_created_and_symlink_refused(self):
         with tempfile.TemporaryDirectory() as tmp:

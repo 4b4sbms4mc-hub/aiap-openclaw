@@ -147,7 +147,7 @@ def load_checkpoint(path, expected_sha256, now):
 
 
 def schema(db):
-    return db.execute("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name").fetchall()
+    return db.execute("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name").fetchall()
 
 
 def restore_snapshot(snapshot_dir, checkpoint, expected_sha256, target_dir, clock=None):
