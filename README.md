@@ -34,6 +34,8 @@ An experimental repository-only [old-snapshot recovery governance tool](lavida/d
 
 A repository-only [synthetic witness experiment](lavida/docs/RECOVERY_WITNESS_CN.md) adds 16 tests for signed nonce-bound heads, pending-update blocking and in-process rollback checks. It also reproduces source-update bypass and loss of rollback memory after restart; it does not supply an independent production witness.
 
+The [persistent reader experiment](lavida/docs/RECOVERY_HIGHWATER_CN.md) adds 16 tests for trusted local high-water storage, restart, process termination around commit and concurrent stale readers. It does not protect against rollback of the entire trusted store or enforce source-update coupling.
+
 ## Legacy v0.3.0 bundle
 
 The existing root `plugin.json`, `mcp.json`, `bin/`, `skills/` and embedded `aiap-core/` remain the legacy protocol-validation bundle. Its MCP tools are `aiap_validate_identity`, `aiap_validate_transfer` and `aiap_inspect_avatar`; these do not provide the La Vida persistent-memory interface.

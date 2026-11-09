@@ -1,6 +1,10 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # Validation evidence and limits
 
+## Persistent reader high-water experiment (2026-11-09)
+
+Sixteen additional tests bring recovery/witness/high-water coverage to 54. Actual child-process restart, SIGKILL before/after SQLite commit and concurrent stale-reader serialization pass. Stored signed heads survive normal restarts; an explicit whole-store rollback negative test remains. This is trusted local reader storage, not durable witness storage or production freshness. [Contract and limits](RECOVERY_HIGHWATER_CN.md).
+
 ## Synthetic witness state machine (2026-11-09)
 
 Sixteen in-memory witness tests plus the 22 recovery tests pass (38 total), using real Ed25519 signatures and a checkpoint-to-isolated-restore flow. Two explicit negative tests demonstrate source-update bypass and rollback after reader-state loss; this is not a durable independent witness or activation service. [Behavior, reproduction and remaining trust gaps](RECOVERY_WITNESS_CN.md).
