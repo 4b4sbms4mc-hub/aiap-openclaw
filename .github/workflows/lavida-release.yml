@@ -36,7 +36,7 @@ jobs:
       - name: Core tests (66)
         working-directory: lavida/core
         run: python -m unittest discover -s tests -v
-      - name: Recovery governance, live observation and readiness tests (163)
+      - name: Recovery governance, live observation and readiness tests (167)
         run: python -m unittest discover -s scripts/tests -v
       - name: Plugin HTTP integration (15)
         working-directory: lavida
