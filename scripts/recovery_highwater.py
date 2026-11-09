@@ -83,7 +83,7 @@ class DurableWitnessReader:
 
     def _load(self, db):
         require(db.execute('PRAGMA integrity_check').fetchone()[0] == 'ok', 'E_READER_STORAGE')
-        objects = db.execute("SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").fetchall()
+        objects = db.execute("SELECT type,name,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'").fetchall()
         require(objects == [('table', 'reader_state', TABLE)], 'E_READER_STORAGE')
         rows = db.execute('SELECT id,body FROM reader_state').fetchall()
         require(len(rows) == 1 and rows[0][0] == 1, 'E_READER_STORAGE')

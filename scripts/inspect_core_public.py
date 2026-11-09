@@ -117,7 +117,7 @@ def inspect(package_dir, data_dir):
             db.execute('PRAGMA trusted_schema=OFF')
             db.execute('BEGIN')
             rows = db.execute("SELECT type,name,tbl_name,sql FROM sqlite_master "
-                              "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name").fetchall()
+                              "WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name").fetchall()
             raw = json.dumps(rows, ensure_ascii=False, separators=(',', ':')).encode()
             result.update(schema_status='read-only', schema_sha256=sha(raw), schema_object_count=len(rows))
         finally:

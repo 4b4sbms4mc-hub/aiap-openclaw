@@ -3,7 +3,7 @@
 
 ## Read-only NAS/Mac readiness collector (2026-11-09)
 
-Three additional tests bring scripts/tests coverage to 99 (96 recovery governance + 3 metadata privacy/read-only tests). Known public files only are fingerprinted; synthetic source files remain unchanged, application markers/tokens are absent, missing DBs are not created and symlinks are refused. Actual deployment paths and reports remain private. No cross-device service or production modification is claimed. [Collector and readiness boundaries](NAS_MAC_READINESS_CN.md).
+The collector and literal SQLite-prefix regressions bring scripts/tests coverage to 101 (97 recovery governance + 4 metadata privacy/read-only tests). Internal objects are excluded by a literal sqlite_ prefix; lookalike custom tables are included in fingerprints and refused by recovery/reader schema checks. Known public files only are fingerprinted; synthetic source files remain unchanged, application markers/tokens are absent, missing DBs are not created and symlinks are refused. Actual deployment paths and reports remain private. No cross-device service or production modification is claimed. [Collector and readiness boundaries](NAS_MAC_READINESS_CN.md).
 
 ## Checkpoint renewal and control-loss review (2026-11-09)
 

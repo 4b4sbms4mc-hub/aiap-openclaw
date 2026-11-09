@@ -157,7 +157,7 @@ class DurableReaderTests(unittest.TestCase):
         self.reject('E_INTEGRITY', self.open)
 
     def test_unknown_schema_and_corrupt_db_rejected(self):
-        with sqlite3.connect(self.d.db) as db: db.execute('CREATE TABLE unexpected(x)')
+        with sqlite3.connect(self.d.db) as db: db.execute('CREATE TABLE sqliteXextra(x)')
         self.reject('E_READER_STORAGE', self.open)
         self.d.db.write_bytes(b'CORRUPT_DATABASE')
         with self.assertRaises(sqlite3.DatabaseError): self.open()
