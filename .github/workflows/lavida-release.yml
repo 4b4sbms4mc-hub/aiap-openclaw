@@ -36,8 +36,14 @@ jobs:
       - name: Core tests (66)
         working-directory: lavida/core
         run: python -m unittest discover -s tests -v
-      - name: Recovery governance, live observation and readiness tests (167)
+      - name: Recovery governance, live observation and readiness tests (180)
         run: python -m unittest discover -s scripts/tests -v
+      - name: Install synthetic SSH lab dependency
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends openssh-server
+      - name: Verify restricted SSH probe installation and rollback in isolated fixture
+        run: sudo /usr/bin/python3 scripts/check_ssh_probe_lab.py
       - name: Plugin HTTP integration (15)
         working-directory: lavida
         env:
