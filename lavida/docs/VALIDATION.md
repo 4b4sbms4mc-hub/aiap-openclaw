@@ -1,6 +1,10 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # Validation evidence and limits
 
+## Local source transaction gate experiment (2026-11-09)
+
+Twenty source-gate tests bring recovery governance coverage to 74. Actual source transactions, persistent pending/head/key, four child SIGKILL boundaries, two-process writers and a durable-reader-to-isolated-restore flow pass. Production Service/HTTP are unchanged; whole source/control rollback and post-proof races from bypass writers remain explicit limits. [Ordering and failure semantics](RECOVERY_SOURCE_GATE_CN.md).
+
 ## Persistent reader high-water experiment (2026-11-09)
 
 Sixteen additional tests bring recovery/witness/high-water coverage to 54. Actual child-process restart, SIGKILL before/after SQLite commit and concurrent stale-reader serialization pass. Stored signed heads survive normal restarts; an explicit whole-store rollback negative test remains. This is trusted local reader storage, not durable witness storage or production freshness. [Contract and limits](RECOVERY_HIGHWATER_CN.md).

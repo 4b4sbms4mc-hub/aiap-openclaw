@@ -36,6 +36,8 @@ A repository-only [synthetic witness experiment](lavida/docs/RECOVERY_WITNESS_CN
 
 The [persistent reader experiment](lavida/docs/RECOVERY_HIGHWATER_CN.md) adds 16 tests for trusted local high-water storage, restart, process termination around commit and concurrent stale readers. It does not protect against rollback of the entire trusted store or enforce source-update coupling.
 
+A local-only [source transaction gate experiment](lavida/docs/RECOVERY_SOURCE_GATE_CN.md) adds 20 tests for persisting pending before source commit, publishing checkpoints afterward, restart recovery and concurrent gated writers. Existing production Service/HTTP entry points do not use this gate; whole-store rollback and cross-device trust remain outside its guarantee.
+
 ## Legacy v0.3.0 bundle
 
 The existing root `plugin.json`, `mcp.json`, `bin/`, `skills/` and embedded `aiap-core/` remain the legacy protocol-validation bundle. Its MCP tools are `aiap_validate_identity`, `aiap_validate_transfer` and `aiap_inspect_avatar`; these do not provide the La Vida persistent-memory interface.
