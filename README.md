@@ -65,3 +65,5 @@ Whitepapers, specifications and prose documentation: CC BY 4.0.
 Existing [license map](LICENSE), [open-standard policy](OPEN-STANDARD-POLICY.md), [IP policy](IP-POLICY.md) and [trademark policy](TRADEMARK.md) remain in force.
 
 When `sshd -G` is unavailable, a [static configuration inventory](lavida/docs/NAS_ACCESS_PREFLIGHT_CN.md#静态文本补查) filters configuration text without starting sshd or testing host keys. Four new tests bring scripts/tests to 167; this inventory does not establish effective settings.
+
+[Restricted SSH probe preparation](lavida/docs/SSH_TRANSPORT_PROBE_CN.md) adds a create-only installer, bounded unprivileged probe and client, twelve tests (179 total), and a separate synthetic Linux SSH installation/restriction/rollback lab. It supplies no source observation and has not been installed on the real NAS.

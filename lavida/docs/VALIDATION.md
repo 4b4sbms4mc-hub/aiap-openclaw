@@ -1,6 +1,10 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # Validation evidence and limits
 
+## Restricted SSH transport probe preparation (2026-11-10)
+
+Twelve new tests bring scripts/tests to179: bounded standalone probe requests, strict commands/JSON/nonce, UID and response binding, subprocess flood/timeout/error rejection. A separate Linux root-only fixture installs into a projected tree and launches a loopback sshd with synthetic accounts/keys to test restrictions, conflicts and rollback. This stage supplies no source observation and grants no Core/Docker/sudo access. Real NAS installation and authentication remain subject to explicit approval and subsequent verification. [Scope and installation boundaries](SSH_TRANSPORT_PROBE_CN.md).
+
 ## Static SSH configuration text inventory (2026-11-10)
 
 Four tests bring scripts/tests to 167. `inspect_sshd_config_static.awk` filters stdin only, preserving selected values and multiple paths while redacting executable command arguments and ignoring environment/private-key material. Tests cover whitespace/equals/case, quoted comments, Include/Match as unevaluated references, control characters and line bounds. The operator's real NAS access preflight completed without configuration changes, but its `sshd -G` probe was unavailable; no exact cause/version or effective authorization path is inferred. Static follow-up is still required before the restricted installer can be finalized.
