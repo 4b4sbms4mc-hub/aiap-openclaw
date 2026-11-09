@@ -1,6 +1,10 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # Validation evidence and limits
 
+## Read-only NAS/Mac readiness collector (2026-11-09)
+
+Three additional tests bring scripts/tests coverage to 99 (96 recovery governance + 3 metadata privacy/read-only tests). Known public files only are fingerprinted; synthetic source files remain unchanged, application markers/tokens are absent, missing DBs are not created and symlinks are refused. Actual deployment paths and reports remain private. No cross-device service or production modification is claimed. [Collector and readiness boundaries](NAS_MAC_READINESS_CN.md).
+
 ## Checkpoint renewal and control-loss review (2026-11-09)
 
 Ten renewal and twelve read-only review tests bring recovery-governance coverage to 96. Expired checkpoint renewal preserves source bytes and grants; strict sequence contention and child SIGKILL boundaries pass. Loss reports compare signed source snapshots with independently retained reader heads but never re-enroll or authorize activation. [Contracts, limits and deployment decisions](RECOVERY_RENEWAL_LOSS_CN.md).

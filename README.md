@@ -40,6 +40,8 @@ A local-only [source transaction gate experiment](lavida/docs/RECOVERY_SOURCE_GA
 
 The [renewal and control-loss review experiment](lavida/docs/RECOVERY_RENEWAL_LOSS_CN.md) adds 22 tests (96 recovery-governance total): explicit source-checked checkpoint renewal and read-only owner-review evidence after control loss. It never automatically re-enrolls a lost witness or grants activation; independent deployment inputs remain unconfirmed.
 
+A [read-only NAS/Mac readiness collector](lavida/docs/NAS_MAC_READINESS_CN.md) fingerprints only known public code/Schema and SQLite schema metadata, with 3 privacy/read-only tests (99 tests in scripts/tests total). It does not deploy a cross-device witness or inspect memory/credential rows.
+
 ## Legacy v0.3.0 bundle
 
 The existing root `plugin.json`, `mcp.json`, `bin/`, `skills/` and embedded `aiap-core/` remain the legacy protocol-validation bundle. Its MCP tools are `aiap_validate_identity`, `aiap_validate_transfer` and `aiap_inspect_avatar`; these do not provide the La Vida persistent-memory interface.
