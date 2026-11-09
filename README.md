@@ -46,7 +46,9 @@ The [independent durable witness experiment](lavida/docs/RECOVERY_DURABLE_LIVE_W
 
 A [create-only Mac Keychain signer](lavida/docs/MAC_KEYCHAIN_SIGNER_CN.md) adds 10 tests. Its default CLI prints a public plan; actual credential creation requires an explicit action, refuses duplicates and returns only public metadata. An operator-approved real Mac credential creation, signing self-test and fresh-process public read-back have passed. No network service or activation is enabled.
 
-[Separate SSH identity preparation](lavida/docs/SSH_IDENTITY_PREPARATION_CN.md) adds 10 tests (159 scripts/tests total): independent Keychain namespace, private short-lived real ssh-agent tests and no-connection SSH configuration checks. Real SSH credential creation, NAS authorization and remote authentication are not yet performed.
+[Separate SSH identity preparation](lavida/docs/SSH_IDENTITY_PREPARATION_CN.md) adds 10 tests (159 scripts/tests total): independent Keychain namespace, private short-lived real ssh-agent tests and no-connection SSH configuration checks. The approved Mac SSH credential has now passed native creation and fresh-process agent self-tests; NAS authorization and remote authentication are not yet performed.
+
+[Read-only NAS access inventory](lavida/docs/NAS_ACCESS_PREFLIGHT_CN.md) adds four tests (163 scripts/tests total), collecting filtered account/path/configuration metadata before a concrete restricted-access installer can be reviewed.
 
 ## Legacy v0.3.0 bundle
 
