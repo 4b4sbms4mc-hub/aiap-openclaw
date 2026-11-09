@@ -1,0 +1,48 @@
+{
+  "date": "2026-11-09",
+  "model": "qwen/qwen3.5-9b",
+  "host": "OpenClaw 2026.9.4",
+  "purpose": "Record failures as well as successful probes; no universal model reliability claim",
+  "trials": [
+    {
+      "plugin": "0.3.4",
+      "language": "en",
+      "result": "passed",
+      "scope": "initial conversation/approval/restore/revocation probe"
+    },
+    {
+      "plugin": "0.3.4",
+      "language": "zh-CN",
+      "result": "failed",
+      "reason": "explicit remember request did not generate a candidate; automatic-off confused with manual unavailability; nonexistent approval command mentioned"
+    },
+    {
+      "plugin": "0.3.5",
+      "language": "zh-CN",
+      "presentation": "default tool directory",
+      "result": "passed-once",
+      "scope": "manual guidance plus negative controls; later repeat failed"
+    },
+    {
+      "plugin": "0.3.5",
+      "language": "zh-CN",
+      "presentation": "default tool directory",
+      "result": "failed",
+      "reason": "directory wrapper supplied as direct tool arguments during recall"
+    },
+    {
+      "plugin": "0.3.5",
+      "language": "zh-CN",
+      "presentation": "direct schemas",
+      "result": "failed",
+      "reason": "natural-language/translated query did not match literal substring backend"
+    },
+    {
+      "plugin": "0.3.5",
+      "language": "zh-CN",
+      "presentation": "direct schemas with literal-query guidance",
+      "result": "passed",
+      "scope": "all current conversation assertions, including post-restore recall and revocation"
+    }
+  ]
+}

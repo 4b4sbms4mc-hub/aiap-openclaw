@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import tarfile
 import zipfile
 
 args = argparse.ArgumentParser()
@@ -17,6 +18,15 @@ source = root / 'lavida'
 manifest = json.loads((source / 'RELEASE.json').read_text())
 version = manifest['plugin_version']
 prefix = 'LaVida_for_OpenClaw_' + version
+
+# A version string alone cannot prove that the installed archive contains the reviewed plugin.
+plugin_files = {'package/' + p.name: p.read_bytes() for p in (source / 'plugin').iterdir() if p.is_file()}
+with tarfile.open(source / ('lavida-aiap-' + version + '.tgz')) as plugin_archive:
+    members = plugin_archive.getmembers()
+    if (len(members) != len(plugin_files) or len({m.name for m in members}) != len(members)
+            or any(not m.isfile() or m.name not in plugin_files
+                   or plugin_archive.extractfile(m).read() != plugin_files[m.name] for m in members)):
+        raise SystemExit('Plugin archive does not exactly match reviewed source; run scripts/build_plugin.py')
 
 
 def archive_bytes(files):
@@ -41,6 +51,8 @@ for path in sorted(source.rglob('*')):
     if not path.is_file():
         continue
     rel = path.relative_to(source)
+    if path.suffix == '.tgz' and rel.name != 'lavida-aiap-' + version + '.tgz':
+        continue
     if '__pycache__' in rel.parts or path.suffix == '.pyc' or rel.name == 'SHA256SUMS':
         continue
     if ('data' in rel.parts or '.venv' in rel.parts or path.suffix in {'.pem','.sqlite','.sqlite3'}

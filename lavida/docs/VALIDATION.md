@@ -7,6 +7,10 @@ Codex executed `scripts/check_openclaw_gateway.py` with the packaged release ZIP
 
 This is authenticated `/tools/invoke` evidence, not model-selected conversational tool use or Docker/NAS OpenClaw installation evidence. [Procedure and limits](GATEWAY_ACCEPTANCE_CN.md). Core's existing 66 tests, 15 HTTP integration checks and 15 automatic regression checks also passed again. Historical results below retain their original scope.
 
+## Real local-model conversation probe (2026-11-09)
+
+The optional `--conversation-model` probe also passed with actual LM Studio `qwen/qwen3.5-9b` in OpenClaw, without client tools, forced tool choice or mocked model outputs. It checks a model-generated pending candidate, independent Owner approval, new-session recall of a random answer absent from the question, denied controls, restored new-session recall, and explicit access-unavailable behavior after adapter revocation. [Configuration, reproducible steps and limits](CONVERSATION_ACCEPTANCE_CN.md). Default CI does not claim to execute this local model; the machine-readable local report is in the repository's root `validation/` directory.
+
 ## Existing deployment evidence (user-executed NAS tests, 2026-10-12)
 
 - Core 0.2.0 / La Vida 0.3.4 / OpenClaw 2026.9.4.

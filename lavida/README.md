@@ -11,7 +11,7 @@ A local, single-owner memory service and OpenClaw adapter. Keep approved memorie
 |---|---|
 | AIAP whitepaper reference | 0.4.2 draft |
 | Core Service | 0.2.0 |
-| La Vida for OpenClaw | 0.3.4 |
+| La Vida for OpenClaw | 0.3.5 source candidate; published release remains 0.3.4 |
 | Tested OpenClaw runtime | 2026.9.4 |
 
 Versions are independent. This release is a subset, not full AIAP compliance.

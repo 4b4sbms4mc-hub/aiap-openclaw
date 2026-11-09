@@ -3,10 +3,15 @@
   "core_source": "LaVida_Auto_0.3.4/test-core-0.2.0",
   "core_version": "0.2.0",
   "plugin_source": "LaVida_Auto_0.3.4/plugin",
-  "plugin_version": "0.3.4",
-  "functional_source_changes": false,
+  "plugin_version": "0.3.5",
+  "functional_source_changes": true,
   "fresh_install_packaging_changed": true,
-  "public_status": "experimental-prerelease",
+  "public_status": "source-candidate-not-yet-published",
   "license_metadata_changed": true,
-  "repository": "4b4sbms4mc-hub/aiap-openclaw"
+  "repository": "4b4sbms4mc-hub/aiap-openclaw",
+  "plugin_base_version": "0.3.4",
+  "changes": [
+    "Clarify manual proposals when automatic capture is disabled; preserve independent Owner approval.",
+    "Align search instructions with the default literal-substring backend; preserve scoped retrieval."
+  ]
 }

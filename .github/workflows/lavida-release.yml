@@ -51,11 +51,23 @@ jobs:
       - name: Package source and verify real Gateway fresh install and isolated restore
         run: |
           python scripts/package_lavida.py
-          python scripts/check_openclaw_gateway.py --openclaw-entry "$RUNNER_TEMP/aiap-openclaw-host/node_modules/openclaw/openclaw.mjs" --release-zip dist/LaVida_for_OpenClaw_0.3.4.zip --output .validation/gateway.json
+          python scripts/check_openclaw_gateway.py --openclaw-entry "$RUNNER_TEMP/aiap-openclaw-host/node_modules/openclaw/openclaw.mjs" --output .validation/gateway.json
       - uses: actions/upload-artifact@v4
         with:
           name: lavida-gateway-acceptance
           path: .validation/gateway.json
+      - name: Build isolated Docker fixture with real OpenClaw
+        run: docker build -f scripts/Dockerfile.gateway-acceptance -t aiap-gateway-acceptance .
+      - name: Verify fresh Gateway and restored tool calls inside Docker without external network
+        run: |
+          docker create --name aiap-gateway-acceptance --network none --read-only --tmpfs /tmp:rw,nosuid,mode=1777,size=256m --tmpfs /reports:rw,nosuid,mode=1777,size=8m --cap-drop ALL --security-opt no-new-privileges --env GITHUB_SHA="$GITHUB_SHA" aiap-gateway-acceptance
+          docker start -a aiap-gateway-acceptance
+          test "$(docker inspect --format '{{.State.ExitCode}}' aiap-gateway-acceptance)" = 0
+      - name: Remove synthetic Gateway container and image
+        if: always()
+        run: |
+          docker rm -f aiap-gateway-acceptance || true
+          docker image rm aiap-gateway-acceptance || true
       - name: Build and initialize fresh Core Docker fixture
         run: |
           docker compose -f lavida/compose.yaml build

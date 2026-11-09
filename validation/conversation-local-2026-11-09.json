@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "openclaw_version": "2026.9.4",
+  "node_version": "v24.22.1",
+  "python_version": "3.12.14",
+  "release_sha256": "8fbb828d574608dcccf2c8c969b49a68aefc158172cff5100b6fb3573c73bc9f",
+  "commit": null,
+  "checks": {
+    "release_checksums": true,
+    "fresh_archive_install": true,
+    "fresh_gateway_auth_and_session": true,
+    "fresh_propose_owner_approve_recall": true,
+    "fresh_pending_rejected_and_space_isolation": true,
+    "conversation_model_pending_and_owner_approval": true,
+    "conversation_rejected_and_private_controls_excluded": true,
+    "fresh_conversation_cross_session_recall": true,
+    "stopped_snapshot_checksums_and_sqlite": true,
+    "original_state_offline_during_restore": true,
+    "restored_gateway_auth_and_session": true,
+    "restored_gateway_recall": true,
+    "restored_local_signature": true,
+    "restored_propose_owner_approve_recall": true,
+    "restored_conversation_cross_session_recall": true,
+    "conversation_revocation_reported_without_recall": true,
+    "temporary_processes_stopped": true
+  },
+  "execution_environment": "local-host",
+  "limits": [
+    "Conversation evidence applies only to this tested local model/configuration",
+    "No Docker/NAS deployment",
+    "No secure transfer or revocation-aware historical recovery guarantee"
+  ],
+  "core_version": "0.2.0",
+  "plugin_version": "0.3.5",
+  "conversation_model": "qwen/qwen3.5-9b",
+  "conversation_prompt_language": "zh-CN",
+  "temporary_state_removed": true,
+  "status": "passed",
+  "tested_plugin_archive_sha256": "09db63a1ec7749d660752da436496e4bd367e9c7457d3ef1ce5bd6faca60ddc2",
+  "tool_search_presentation": "direct-schemas (tools.toolSearch=false)",
+  "scope_note": "Source ZIP hash identifies the exact tested snapshot. Subsequent documentation-only edits do not change the verified plugin archive hash."
+}

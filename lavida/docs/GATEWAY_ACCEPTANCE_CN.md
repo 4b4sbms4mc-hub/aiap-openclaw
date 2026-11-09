@@ -34,7 +34,7 @@ python scripts/check_openclaw_gateway.py \
 
 ## 仍未覆盖
 
-- 对话模型在完整 agent turn 中自行选择并调用工具。
+- 默认无模型探针不覆盖完整 agent turn；另行执行的本地模型对话证据见 [CONVERSATION_ACCEPTANCE_CN.md](CONVERSATION_ACCEPTANCE_CN.md)，不能推导其他模型同样可靠。
 - Docker/NAS 的完整 OpenClaw 新安装与恢复；现有 Docker CI 只证明 Core 部分。
 - 多成员、组织治理、完整生命周期与删除/撤销传播。
 - 跨 Runtime 安全迁移、Owner 远程证明和历史备份的当前授权重评估。

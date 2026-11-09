@@ -1,28 +1,24 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
-# La Vida for OpenClaw 0.3.4 — First Usable Memory Release
+# La Vida for OpenClaw 0.3.5 — Manual proposal guidance
 
-Author: Wang Lu. Experimental prerelease.
+Author: Wang Lu. Experimental source candidate; the existing published 0.3.4 tag/assets are preserved. Core Service remains 0.2.0; OpenClaw target remains 2026.9.4. Protocol and runtime versions are independent.
 
-Core Service 0.2.0 + native La Vida plugin 0.3.4, targeting OpenClaw 2026.9.4. Versions are independent from the AIAP protocol/whitepaper versions.
+## Behavior change
 
-## Usable memory loop
+A Chinese conversation probe exposed confusion between disabled automatic capture and the manual proposal tool. The plugin now explicitly instructs the model to submit a pending candidate for an explicit remember request even when automatic proposals are off, explain actual pending status, and never invent an approval command. Independent Owner review is still required before active recall. No identity, scope or approval checks are relaxed.
 
-Local persistent Avatar identity and SQLite state; one-space adapter credentials; trusted owner/session checks; aiap_memory_status, aiap_memory_search and aiap_memory_propose; candidate → independent owner review → approve/reject → recall; pending/rejected candidates excluded; identity and memory revision survive restart.
-
-The default entry disables automatic proposals, semantic retrieval and background archival. Existing optional implementations are retained. No personal databases, memories, credentials, keys or NAS backups are included.
+Search guidance now matches the default literal-substring backend: use an exact project identifier or short keyword and shorten a zero-hit query rather than appending the whole question or translated words. The optional local-model test presents the three tool schemas directly with the host's documented `tools.toolSearch: false`; default dynamic-directory behavior is not certified by this result.
 
 ## Validation
 
-Local: 66 Core tests, 15 plugin HTTP integration checks and 15 automatic-candidate checks passed. Plugin host registration and automatic events in these tests are simulated.
+Real local-model probes use LM Studio `qwen/qwen3.5-9b` through the normal OpenClaw agent path, with no forced tool choice or mocked model output. They check model-created candidates, independent approval, random-code recall in new conversations before/after isolated restore, denied controls and unavailable-access reporting after revocation. Results are model/configuration specific; see [procedure and failure history](CONVERSATION_ACCEPTANCE_CN.md). Default CI does not run this local model.
 
-Prior NAS deployment: actual plugin load/tool calls, scoped hybrid search, acceptance/rejection and restart persistence; backup checksums; isolated Core identity/signature/memory restoration; isolated plugin load; Gateway health and readiness HTTP 200.
+CI reruns 66 Core tests, 15 plugin integration checks and 15 automatic-candidate checks; real Gateway release installation/restore; a network-isolated Docker fixture containing real Gateway/Core processes; and the separate Compose Core tests. The Docker fixture is synthetic and does not prove the user's existing NAS, separate-container production topology or model inference in Docker.
 
-GitHub CI runs the same automated suites and fresh Core Docker initialization, owner approval/recall and restart checks. CI_VALIDATION.json in the downloadable ZIP records successful CI execution and its commit/run URL. The newly packaged OpenClaw installation path and restored Gateway→La Vida→Core tool-call chain remain to be tested.
+Release ZIPs are reproducible. `scripts/build_plugin.py` rebuilds the matching plugin archive from its reviewed source. CI packaging requires Gateway evidence for the exact commit, plugin/Core versions and tested source ZIP. Publishing a new prerelease remains an explicit workflow-dispatch operation; old tags are never overwritten.
 
-## Boundaries
+## Boundaries and licenses
 
-This is not a full AIAP compliance, multi-owner, MCP memory server, secure-transfer or workflow-execution release. The earlier v0.3.0 bundle/MCP validation tools remain available separately. Existing data is not migrated automatically.
+Automatic capture, semantic retrieval and background archival remain disabled by default. This is not complete AIAP compliance, multi-owner, MCP memory-server, secure-transfer, workflow-execution or historical revocation-aware recovery certification. No personal databases, keys, credentials or NAS backups are included.
 
-## License
-
-Code, schemas and tests: Apache-2.0. Documentation: CC BY 4.0. Existing trademark policy remains. Runtime behavior is unchanged; release metadata, license notices, installation documentation and packaging are updated.
+Code, schemas and tests: Apache-2.0. Prose: CC BY 4.0. Existing trademark and third-party policies remain in force.

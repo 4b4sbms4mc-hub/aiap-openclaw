@@ -17,7 +17,7 @@
 | OpenClaw 接口 | status、search、propose 三个工具 |
 | 基础权限 | 可信宿主 Owner 标记、会话绑定、凭证到期和撤销 |
 
-组件版本沿用 Core 0.2.0、La Vida 0.3.4；白皮书参考 v0.4.2。没有把实现重新编号成 0.1.0，也不声明完整白皮书合规。
+组件版本沿用 Core 0.2.0、La Vida 0.3.5；白皮书参考 v0.4.2。没有把实现重新编号成 0.1.0，也不声明完整白皮书合规。
 
 ## 简化的是首发入口
 
@@ -29,7 +29,7 @@
 
 1. [全新安装及闭环演示](docs/INSTALL_CN.md)：新建独立数据，不操作现有 NAS 数据卷。
 2. [验证范围](docs/VALIDATION.md)：区分真实 Gateway HTTP 新安装/恢复、本地测试、既有 NAS 实测与 Docker/NAS 待测。
-3. [Release 说明草稿](docs/RELEASE_NOTES.md)：使用独立 tag `lavida-openclaw-v0.3.4`，避免覆盖协议 `v0.3.0`。
+3. [Release 说明草稿](docs/RELEASE_NOTES.md)：使用独立 tag `lavida-openclaw-v0.3.5`，避免覆盖协议 `v0.3.0`。
 4. [许可范围](LICENSE_SCOPE.md)：代码 Apache-2.0，文档 CC BY 4.0，保留原有商标政策。
 
 此包不含个人记忆、运行数据库、凭证、私钥、NAS 备份或 OpenClaw 完整宿主源码。SHA256SUMS 是完整性校验，不是发布者签名。

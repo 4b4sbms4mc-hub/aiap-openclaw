@@ -7,7 +7,7 @@ AIAP is a runtime-neutral protocol for user-controlled AI state. This repository
 
 | Integration | Version | Purpose |
 |---|---|---|
-| La Vida native memory plugin | 0.3.4 | Scoped recall, pending proposals, independent owner approval |
+| La Vida native memory plugin | 0.3.5 source candidate (published: 0.3.4) | Scoped recall, pending proposals, independent owner approval |
 | AIAP Core Service | 0.2.0 | Local identity and persistent memory state used by La Vida |
 | Legacy Agent Plugins bundle | 0.3.0 | AIAP object inspection and MCP validation tools |
 
@@ -24,7 +24,7 @@ The three native tools are `aiap_memory_status`, `aiap_memory_search`, and `aiap
 Tested target: OpenClaw 2026.9.4, Node 24.22.1, Core Service 0.2.0. The plugin itself needs Node 22+ with node:sqlite; the pinned host requires >=24.16.0 <25 or >=26.1.0.
 The release ZIP is standalone; installing the repository root installs the legacy bundle, not the new memory plugin. Follow the La Vida guide and install its `.tgz`.
 
-Validation: 66 Core tests + 15 plugin integration checks + 15 automatic-candidate regression checks. On 2026-11-09, real OpenClaw Gateway HTTP tests passed release-ZIP fresh installation and isolated stopped-snapshot restoration, including restored tool calls and a new approval/recall loop. Prior NAS results and Core Docker CI remain separate evidence. Conversational model-selected tool use and full Docker/NAS OpenClaw new installation remain pending. See [procedure and exact limits](lavida/docs/GATEWAY_ACCEPTANCE_CN.md).
+Validation: 66 Core tests + 15 plugin integration checks + 15 automatic-candidate regression checks. On 2026-11-09, real OpenClaw Gateway HTTP tests passed release-ZIP fresh installation and isolated stopped-snapshot restoration, including restored tool calls and a new approval/recall loop. A separate local [real conversation probe](lavida/docs/CONVERSATION_ACCEPTANCE_CN.md) passed with LM Studio `qwen/qwen3.5-9b`, including independent approval, cross-session recall, restore and revoked access. Prior NAS results and Core Docker CI remain separate evidence. Full Docker/NAS OpenClaw new installation remains pending; the model result is limited to the tested configuration and is not run in default CI. See [Gateway procedure and exact limits](lavida/docs/GATEWAY_ACCEPTANCE_CN.md).
 
 The [latest protocol design drafts](https://github.com/4b4sbms4mc-hub/ai-avatar-protocol/tree/main/drafts) are versioned separately. Validation runs on relevant PR/main changes. Publishing a new tag is an explicit workflow-dispatch operation; existing 0.3.4 release assets are not overwritten by documentation or test updates.
 
