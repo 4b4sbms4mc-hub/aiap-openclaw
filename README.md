@@ -67,3 +67,5 @@ Existing [license map](LICENSE), [open-standard policy](OPEN-STANDARD-POLICY.md)
 When `sshd -G` is unavailable, a [static configuration inventory](lavida/docs/NAS_ACCESS_PREFLIGHT_CN.md#静态文本补查) filters configuration text without starting sshd or testing host keys. Four new tests bring scripts/tests to 167; this inventory does not establish effective settings.
 
 [Restricted SSH probe preparation](lavida/docs/SSH_TRANSPORT_PROBE_CN.md) adds a create-only installer, bounded unprivileged probe and client, thirteen tests (180 total), and a separate synthetic Linux SSH installation/restriction/rollback lab. The operator-approved NAS installation and native Mac public-key authentication, nonce/UID probe and exact command-refusal acceptance have now passed. It still supplies no source observation.
+
+[Lab source-observation messages](lavida/docs/SOURCE_OBSERVATION_RPC_CN.md) add bounded requests for trusted pre-registered checkpoints and client signature verification, with twelve tests (192 total) and a bounded stdio client. This is an in-process synthetic adapter, not an installed NAS endpoint or production authorization.
