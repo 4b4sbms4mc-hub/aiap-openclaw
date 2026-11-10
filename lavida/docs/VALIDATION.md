@@ -3,7 +3,7 @@
 
 ## Restricted SSH transport probe preparation (2026-11-10)
 
-Thirteen new tests bring scripts/tests to180: bounded standalone probe requests, strict commands/JSON/nonce, UID and response binding, subprocess flood/timeout/error rejection. A separate Linux root-only fixture installs into a projected tree and launches a loopback sshd with synthetic accounts/keys to test restrictions, conflicts and rollback. This stage supplies no source observation and grants no Core/Docker/sudo access. Real NAS installation and authentication remain subject to explicit approval and subsequent verification. [Scope and installation boundaries](SSH_TRANSPORT_PROBE_CN.md).
+Thirteen new tests bring scripts/tests to180: bounded standalone probe requests, strict commands/JSON/nonce, UID and response binding, subprocess flood/timeout/error rejection. A separate Linux root-only fixture installs into a projected tree and launches a loopback sshd with synthetic accounts/keys to test restrictions, conflicts and rollback. This stage supplies no source observation and grants no Core/Docker/sudo access. The operator-approved NAS installation subsequently passed native Mac authentication, nonce/UID response binding and exact id-command-refusal acceptance, with dedicated-agent cleanup before success recording. Native NAS forwarding/PTY/rc negative tests were not repeated; those remain CI-only evidence. Source observation and recovery activation remain unavailable. [Scope and installation boundaries](SSH_TRANSPORT_PROBE_CN.md).
 
 ## Static SSH configuration text inventory (2026-11-10)
 
