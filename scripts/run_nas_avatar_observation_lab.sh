@@ -26,7 +26,7 @@ cp -R "$root/lavida/core" "$staging/lavida/core"
 for name in recovery_guard.py recovery_highwater.py recovery_witness.py recovery_source_gate.py recovery_live_observation.py recovery_avatar_observation.py; do
   cp "$root/scripts/$name" "$staging/scripts/$name"
 done
-for name in test_recovery_guard.py test_recovery_live_observation.py recovery_avatar_observation.py; do
+for name in test_recovery_guard.py test_recovery_avatar_observation.py; do
   cp "$root/scripts/tests/$name" "$staging/scripts/tests/$name"
 done
 [ -z "$(find "$staging" -type l -print -quit)" ] || { echo 'E_LAB_SYMLINK' >&2; exit 2; }
