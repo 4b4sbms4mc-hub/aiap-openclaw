@@ -1,6 +1,10 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # Validation evidence and limits
 
+## Lab source-observation messages (2026-11-10)
+
+Twelve tests bring scripts/tests to192. A bounded request selects only a trusted pre-registered checkpoint, delegates to the existing read-only synthetic source observer, and verifies the signed response before feeding the existing witness/reader. Coverage includes nonce replay against a new challenge, expiry, source mutation, tampering, path/operation injection, duplicate fields, malformed/oversized data, private-content exclusion and generic error output. Paths are constructor configuration, not caller input. The producer verifies its envelope before emission. The stdio client bounds direct-child wait and stdout size, rejects error exits and kills/reaps a stalled child; this is not a production worker or a bound on checkpoint/crypto verification CPU. No real NAS or Keychain access, new key or production permission is used. [Scope and deployment gaps](SOURCE_OBSERVATION_RPC_CN.md).
+
 ## Restricted SSH transport probe preparation (2026-11-10)
 
 Thirteen new tests bring scripts/tests to180: bounded standalone probe requests, strict commands/JSON/nonce, UID and response binding, subprocess flood/timeout/error rejection. A separate Linux root-only fixture installs into a projected tree and launches a loopback sshd with synthetic accounts/keys to test restrictions, conflicts and rollback. This stage supplies no source observation and grants no Core/Docker/sudo access. The operator-approved NAS installation subsequently passed native Mac authentication, nonce/UID response binding and exact id-command-refusal acceptance, with dedicated-agent cleanup before success recording. Native NAS forwarding/PTY/rc negative tests were not repeated; those remain CI-only evidence. Source observation and recovery activation remain unavailable. [Scope and installation boundaries](SSH_TRANSPORT_PROBE_CN.md).
