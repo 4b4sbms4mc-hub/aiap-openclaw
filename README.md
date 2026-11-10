@@ -69,3 +69,5 @@ When `sshd -G` is unavailable, a [static configuration inventory](lavida/docs/NA
 [Restricted SSH probe preparation](lavida/docs/SSH_TRANSPORT_PROBE_CN.md) adds a create-only installer, bounded unprivileged probe and client, thirteen tests (180 total), and a separate synthetic Linux SSH installation/restriction/rollback lab. The operator-approved NAS installation and native Mac public-key authentication, nonce/UID probe and exact command-refusal acceptance have now passed. It still supplies no source observation.
 
 [Lab source-observation messages](lavida/docs/SOURCE_OBSERVATION_RPC_CN.md) add bounded requests for trusted pre-registered checkpoints and client signature verification, with twelve tests (192 total) and a bounded stdio client. This is an in-process synthetic adapter, not an installed NAS endpoint or production authorization.
+
+[Avatar-key source observation v2 lab](lavida/docs/AVATAR_SOURCE_OBSERVATION_V2_LAB_CN.md) adds 21 synthetic tests (213 total) and a restricted Linux container runner. The new signature profile/domain is explicitly selected and does not alter v1 RPC or install a production endpoint.
