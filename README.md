@@ -71,3 +71,5 @@ When `sshd -G` is unavailable, a [static configuration inventory](lavida/docs/NA
 [Lab source-observation messages](lavida/docs/SOURCE_OBSERVATION_RPC_CN.md) add bounded requests for trusted pre-registered checkpoints and client signature verification, with twelve tests (192 total) and a bounded stdio client. This is an in-process synthetic adapter, not an installed NAS endpoint or production authorization.
 
 [Avatar-key source observation v2 lab](lavida/docs/AVATAR_SOURCE_OBSERVATION_V2_LAB_CN.md) adds 21 synthetic tests (213 total) and a restricted Linux container runner. The new signature profile/domain is explicitly selected and does not alter v1 RPC or install a production endpoint.
+
+The explicit v2 lab RPC/stdio chain adds 14 tests (227 total), rejects cross-version requests/replies, and retains v1 unchanged. It is not a production NAS endpoint.
