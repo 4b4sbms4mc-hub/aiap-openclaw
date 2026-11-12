@@ -28,7 +28,7 @@ DOMAIN = b'AIAP-LOCAL-RECOVERY-CHECKPOINT-v1\x00'
 
 
 def read_file(path, limit=4 * 1024 * 1024):
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, 'rb') as file:
         info = os.fstat(file.fileno())
         require(stat.S_ISREG(info.st_mode) and info.st_size <= limit, 'E_RECOVERY_FILE')
@@ -148,6 +148,38 @@ def load_checkpoint(path, expected_sha256, now):
 
 def schema(db):
     return db.execute("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name").fetchall()
+
+
+def review_checkpoint(checkpoint, expected_sha256, diagnostic, clock=None):
+    """Compare signed checkpoint metadata with a GOVREAD diagnostic report."""
+    now = (clock or (lambda: datetime.now(timezone.utc)))()
+    payload, _ = load_checkpoint(checkpoint, expected_sha256, now)
+    report = strict_json(read_file(diagnostic, 4096))
+    if isinstance(report, dict) and set(report) == {'source', 'recorded_at', 'plan_sha256', 'result'}:
+        report = report['result']
+    exact(report, ['profile', 'enrollment_sha256', 'governance_sha256', 'core_revision',
+                   'space_count', 'tombstone_count', 'database_access', 'trust'])
+    require(report['profile'] == 'x-aiap-governance-digest-preflight-v1'
+            and report['database_access'] == 'read-only'
+            and report['trust'] == 'diagnostic-only-not-a-checkpoint-or-source-proof',
+            'E_GOVERNANCE_DIAGNOSTIC')
+    governance = {key: payload[key] for key in ('core', 'spaces', 'tombstones', 'revocation_epoch')}
+    expected = {
+        'enrollment_sha256': digest(payload['enrollment']),
+        'governance_sha256': digest(governance),
+        'core_revision': payload['core']['revision'],
+        'space_count': len(payload['spaces']),
+        'tombstone_count': len(payload['tombstones']),
+    }
+    require(all(type(report[key]) is type(value) and report[key] == value
+                for key, value in expected.items()), 'E_GOVERNANCE_MISMATCH')
+    return {
+        'status': 'checkpoint-matches-diagnostic',
+        'checkpoint_sha256': expected_sha256,
+        'expires_at': payload['expires_at'],
+        'source_currentness_verified': False,
+        'registration_performed': False,
+    }
 
 
 def restore_snapshot(snapshot_dir, checkpoint, expected_sha256, target_dir, clock=None):
@@ -295,6 +327,10 @@ def main():
     checkpoint.add_argument('--data-dir', type=Path, required=True)
     checkpoint.add_argument('--output', type=Path, required=True)
     checkpoint.add_argument('--ttl-hours', type=int, default=1)
+    review = commands.add_parser('review-checkpoint', help='compare a pinned signed checkpoint with a GOVREAD report')
+    review.add_argument('--checkpoint', type=Path, required=True)
+    review.add_argument('--checkpoint-sha256', required=True, help='checkpoint digest obtained independently')
+    review.add_argument('--diagnostic', type=Path, required=True, help='raw or locally recorded GOVREAD JSON')
     restore = commands.add_parser('restore')
     restore.add_argument('--snapshot', type=Path, required=True)
     restore.add_argument('--checkpoint', type=Path, required=True)
@@ -303,6 +339,8 @@ def main():
     args = parser.parse_args()
     if args.command == 'checkpoint':
         result = export_checkpoint(args.data_dir, args.output, args.ttl_hours)
+    elif args.command == 'review-checkpoint':
+        result = review_checkpoint(args.checkpoint, args.checkpoint_sha256, args.diagnostic)
     else:
         result = restore_snapshot(args.snapshot, args.checkpoint, args.checkpoint_sha256, args.target)
     print(json.dumps(result, indent=2))
