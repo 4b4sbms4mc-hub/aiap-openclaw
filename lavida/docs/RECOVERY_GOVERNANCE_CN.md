@@ -42,6 +42,19 @@ python scripts/recovery_guard.py restore \
 
 `CURRENT_INDEPENDENTLY_VERIFIED_SHA256` 必须替换为可信渠道独立记录的摘要，不能采用不可信备份附带的值。新 Owner 凭据仅写入新目录，控制台不打印秘密。先检查报告和缺失数量，再在明确范围内为适配器签发新 grant；本实验不自动重连 Gateway 或操作 NAS。
 
+## 登记前的离线核对
+
+登记前可以离线比较一份已签名的检查点和 GOVREAD 诊断结果。检查点摘要应通过独立可信渠道取得。
+
+```sh
+python scripts/recovery_guard.py review-checkpoint \
+  --checkpoint /private/current-checkpoint.json \
+  --checkpoint-sha256 INDEPENDENTLY_VERIFIED_SHA256 \
+  --diagnostic /private/governance-preflight-result.json
+```
+
+工具接受原始 GOVREAD JSON 或项目账本保存的包装结果。它验证检查点摘要、Owner 签名和有效期，再比对登记摘要、治理摘要、Core 修订号及空间和删除记录数量。`checkpoint-matches-diagnostic` 表示两份资料一致。诊断可能过时，登记与恢复仍需独立可信的当前依据。
+
 ## 验证结果与来源
 
 本地 22 项恢复测试通过，覆盖删除/旧版本排除、历史与候选正文清理、旧凭据全部失效、新凭据的批准闭环、检查点不含正文或秘密、摘要/签名/时效/身份/行空间篡改、已知回退、未知 Schema、符号链接、已有目标保护及恢复过程中到期的拒绝。实际 CLI 恢复后启动新的 Core HTTP 进程，确认旧 token 返回 401、旧候选不存在而保留记录可查。测试核对源备份文件摘要未变化。
