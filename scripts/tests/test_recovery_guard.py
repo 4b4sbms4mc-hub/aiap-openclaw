@@ -108,6 +108,41 @@ class RecoveryTests(unittest.TestCase):
         for marker in (b'DELETED_SYNTHETIC', b'DELETED_LATEST_SYNTHETIC', b'DELETED_PENDING_SYNTHETIC', b'OLD_VERSION_SYNTHETIC'):
             self.assertNotIn(marker, raw)
 
+    def test_isolated_restore_requires_a_new_observation_after_preparing_copy(self):
+        from aiap_core.contracts import digest
+        from aiap_core.recovery_isolated import restore_isolated
+        from aiap_core.recovery_registry import CheckpointRegistry
+        from recovery_avatar_observation import observe_source
+
+        clock = lambda: self.now
+        registry = CheckpointRegistry(self.root / 'registry', self.current, clock=clock)
+        registry.initialize(digest(self.service.core(self.owner)['local_enrollment']))
+        registry.register(self.checkpoint, self.pin)
+
+        def observe(nonce, pin):
+            return observe_source(self.current, self.checkpoint, pin, nonce, clock)
+
+        proofs = []
+
+        def replay(nonce, pin):
+            if not proofs:
+                proofs.append(observe(nonce, pin))
+            return proofs[0]
+
+        args = (registry, self.checkpoint, self.snapshot,
+                self.original_files['core.sqlite3'], self.target)
+        with self.assertRaises(Fault) as error:
+            restore_isolated(*args, replay)
+        self.assertEqual(error.exception.code, 'E_SOURCE_OBSERVATION')
+        self.assertFalse(self.target.exists())
+        self.assertFalse(list(self.root.glob('.aiap-recovery-*')))
+
+        result = restore_isolated(*args, observe)
+        self.assertEqual(result['status'], 'isolated-recovery-created')
+        self.assertFalse(result['production_activation'])
+        self.assertEqual(json.loads((self.target / 'recovery-report.json').read_text()), result)
+        self.assertEqual(self.hashes(self.snapshot), self.original_files)
+
     def test_all_old_credentials_fail_and_new_approval_still_works(self):
         self.restore()
         service = Service(self.target, clock=lambda: self.now)

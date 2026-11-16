@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aiap-reference"
-version = "0.3.0"
+version = "0.3.1"
 description = "Reference implementation for AI Avatar Protocol v0.3"
 authors = [{name = "Wang Lu"}]
 requires-python = ">=3.10"
@@ -16,9 +16,14 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+mcp = ["mcp>=2.3,<3"]
 
 [project.scripts]
 aiap = "aiap.cli:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.setuptools]
+packages = ["aiap", "aiap.schemas"]
+package-dir = {"" = "src", "aiap.schemas" = "schemas"}
+
+[tool.setuptools.package-data]
+"aiap.schemas" = ["*.schema.json"]

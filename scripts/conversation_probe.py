@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Optional real-model probe; no client-supplied tools or forced tool choice."""
 import json
+import re
 import secrets
 import sqlite3
 import urllib.request
@@ -26,7 +27,7 @@ def configure(cfg, model, base_url):
                     'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0}}]}}}
     binding = cfg['plugins']['entries']['lavida-aiap']['config']['bindings']['main']
     binding['sessionKeys'] += ['agent:main:probe-' + key for key in
-        ('pending', 'fresh', 'restored', 'revoked', 'rejected', 'private')]
+        ('pending', 'fresh', 'restored', 'revoked', 'rejected', 'private', 'delete')]
 
 
 def chat(base, token, prompt, session):
@@ -43,6 +44,20 @@ def chat(base, token, prompt, session):
     if not isinstance(text, str) or not text.strip():
         raise RuntimeError('conversation returned empty text')
     return text
+
+
+def verify_delete_handoff(base, token, marker, target, require):
+    text = chat(base, token,
+        f'我想删除项目 {marker} 的那条长期记忆。请找到对应记录，告诉我编号、空间、版本以及我如何先预览影响。',
+        'agent:main:probe-delete')
+    expected = {'memory_id': target['memory_id'], 'space': target['space_ref'],
+                'command': 'delete-preview'}
+    missing = [label for label, value in expected.items() if value not in text]
+    require(not missing, 'conversation handoff missing ' + ', '.join(missing))
+    revision = re.escape(str(target['base_revision']))
+    require(re.search(r'(?:revision|版本)[\s*`"：:()|_-]*' + revision + r'\b', text, re.IGNORECASE)
+            is not None, 'conversation handoff has no labeled matching revision')
+    require('--memory-id' not in text, 'conversation handoff assembled a shell command')
 
 
 def run(phase, gateway_base, token, client, core_dir, credential, checks, expected, require):

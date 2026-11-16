@@ -37,13 +37,23 @@ class Service:
         self.directory=Path(data_dir);self.db=self.directory/'core.sqlite3';self.clock=clock or (lambda:datetime.now(timezone.utc))
     def now(self):return self.clock().astimezone(timezone.utc)
     @contextmanager
-    def tx(self):
+    def tx(self, *, read_only=False):
         require(self.db.exists(),'E_NOT_INITIALIZED',503)
-        c=sqlite3.connect(self.db,timeout=10,isolation_level=None);c.row_factory=sqlite3.Row
-        c.execute('PRAGMA foreign_keys=ON');c.execute('PRAGMA secure_delete=ON');c.execute('BEGIN IMMEDIATE')
-        try:yield c;c.commit()
-        except BaseException:c.rollback();raise
-        finally:c.close()
+        location = self.db.resolve().as_uri() + '?mode=ro' if read_only else self.db
+        connection = sqlite3.connect(location, uri=read_only, timeout=10, isolation_level=None)
+        connection.row_factory = sqlite3.Row
+        try:
+            connection.execute('PRAGMA foreign_keys=ON')
+            if not read_only:
+                connection.execute('PRAGMA secure_delete=ON')
+            connection.execute('BEGIN' if read_only else 'BEGIN IMMEDIATE')
+            yield connection
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
     def initialize(self):
         self.directory.mkdir(parents=True,exist_ok=True,mode=0o700)
         require(not self.db.exists(),'E_ALREADY_INITIALIZED',409)
@@ -82,7 +92,8 @@ class Service:
         payload=canonical(core);key=serialization.load_pem_private_key((self.directory/'avatar-key.pem').read_bytes(),None)
         core['integrity']={'manifest_sha256':hashlib.sha256(payload).hexdigest(),'proofs':[{'crypto_profile':'x-aiap-local-ed25519-json-v1','key_ref':'local-key:avatar','signature':b64(key.sign(b'AIAP-LOCAL-CORE-v1\x00'+payload))}]}
         validate('avatar-core',core);c.execute('UPDATE cores SET revision=?,body=? WHERE avatar=?',(n,encode(core),av))
-    def verify_local_core(self,core,enrollment):
+    @staticmethod
+    def verify_local_core(core,enrollment):
         try:
             p=enrollment['payload'];require(p['profile']=='x-aiap-local-enrollment-v1','E_INTEGRITY');Ed25519PublicKey.from_public_bytes(unb64(p['owner_public_key'])).verify(unb64(enrollment['signature']),b'AIAP-LOCAL-ENROLLMENT-v1\x00'+canonical(p))
             bare=copy.deepcopy(core);proof=bare.pop('integrity');raw=canonical(bare)
@@ -274,23 +285,75 @@ class Service:
             self._rebuild_core(c,owner['avatar'])
             c.execute('UPDATE deltas SET status=?,body=NULL,outcome=? WHERE avatar=? AND id=?',('accepted',encode(out),owner['avatar'],ident))
             return {'delta_id':ident,'status':'accepted','objects':out,'idempotent':False}
-    def delete(self,token,body):
-        exact(body,['memory_id','space_ref','base_revision']);require(isinstance(body['memory_id'],str) and isinstance(body['space_ref'],str) and type(body['base_revision']) is int)
-        with self.tx() as c:
-            g=self._grant(c,token);self._allow(g,[body['space_ref']],'delete',owner=True)
-            r=c.execute('SELECT * FROM memories WHERE avatar=? AND id=? AND space=?',(g['avatar'],body['memory_id'],body['space_ref'])).fetchone();require(r is not None,'E_NOT_FOUND',404)
-            require(r['revision']==body['base_revision'],'E_VERSION_CONFLICT',409);m=json.loads(r['body'])
-            a=self._audit(c,g['avatar'],body['space_ref'],'memory-deleted',body['memory_id'],g['id'])
-            tomb={'object_ref':{'id':body['memory_id'],'version':r['revision']},'scope':m['scope'],'deleted_at':stamp(self.now()),'authorization_ref':{'id':a,'version':1},'purge_status':'backup-expiry-pending','supersedes_through_revision':r['revision']}
-            validate('tombstone',tomb);c.execute('INSERT INTO tombstones VALUES(?,?,?,?,?)',(g['avatar'],body['memory_id'],body['space_ref'],r['revision'],encode(tomb)))
-            c.execute('DELETE FROM memories WHERE avatar=? AND id=?',(g['avatar'],body['memory_id']))
-            c.execute('DELETE FROM history WHERE avatar=? AND id=?',(g['avatar'],body['memory_id']))
-            for d in c.execute('SELECT id,body FROM deltas WHERE avatar=? AND body IS NOT NULL',(g['avatar'],)).fetchall():
-                e=json.loads(d['body'])
-                if any(b['target_object_id']==body['memory_id'] for b in e['bindings']):c.execute('UPDATE deltas SET status=?,body=NULL WHERE avatar=? AND id=?',('invalidated',g['avatar'],d['id']))
-            for view in c.execute('SELECT id,body FROM views WHERE avatar=? AND invalidated=0',(g['avatar'],)).fetchall():
-                if any(x['id']==body['memory_id'] for x in json.loads(view['body'])['objects']):c.execute('UPDATE views SET invalidated=1 WHERE id=?',(view['id'],))
-            self._rebuild_core(c,g['avatar']);return {'deleted':True,'tombstone':tomb,'physical_backup_erasure':'not_guaranteed'}
+    def _deletion_target(self, connection, token, body):
+        exact(body, ['memory_id', 'space_ref', 'base_revision'])
+        memory_id, space_ref, revision = body['memory_id'], body['space_ref'], body['base_revision']
+        require(isinstance(memory_id, str) and isinstance(space_ref, str) and type(revision) is int)
+        grant = self._grant(connection, token)
+        self._allow(grant, [space_ref], 'delete', owner=True)
+        row = connection.execute(
+            'SELECT * FROM memories WHERE avatar=? AND id=? AND space=?',
+            (grant['avatar'], memory_id, space_ref),
+        ).fetchone()
+        require(row is not None, 'E_NOT_FOUND', 404)
+        require(row['revision'] == revision, 'E_VERSION_CONFLICT', 409)
+        return grant, row
+
+    def _deletion_dependencies(self, connection, avatar, memory_id):
+        deltas = connection.execute('SELECT id,body FROM deltas WHERE avatar=? AND body IS NOT NULL', (avatar,))
+        delta_ids = [row['id'] for row in deltas if any(
+            binding['target_object_id'] == memory_id for binding in json.loads(row['body'])['bindings']
+        )]
+        views = connection.execute('SELECT id,body FROM views WHERE avatar=? AND invalidated=0', (avatar,))
+        view_ids = [row['id'] for row in views if any(
+            item['id'] == memory_id for item in json.loads(row['body'])['objects']
+        )]
+        return delta_ids, view_ids
+
+    def preview_delete(self, token, body):
+        with self.tx(read_only=True) as connection:
+            grant, row = self._deletion_target(connection, token, body)
+            identity = (grant['avatar'], row['id'])
+            history_count = connection.execute(
+                'SELECT count(*) FROM history WHERE avatar=? AND id=?', identity,
+            ).fetchone()[0]
+            delta_ids, view_ids = self._deletion_dependencies(connection, *identity)
+            return {
+                'memory_id': row['id'],
+                'space_ref': row['space'],
+                'base_revision': row['revision'],
+                'history_versions_to_remove': history_count,
+                'proposals_to_invalidate': len(delta_ids),
+                'views_to_invalidate': len(view_ids),
+                'tombstone_purge_status': 'backup-expiry-pending',
+                'physical_backup_erasure': 'not_guaranteed',
+            }
+
+    def delete(self, token, body):
+        with self.tx() as connection:
+            grant, row = self._deletion_target(connection, token, body)
+            avatar, memory_id, revision = grant['avatar'], row['id'], row['revision']
+            delta_ids, view_ids = self._deletion_dependencies(connection, avatar, memory_id)
+            audit_id = self._audit(connection, avatar, row['space'], 'memory-deleted', memory_id, grant['id'])
+            tombstone = {
+                'object_ref': {'id': memory_id, 'version': revision},
+                'scope': json.loads(row['body'])['scope'],
+                'deleted_at': stamp(self.now()),
+                'authorization_ref': {'id': audit_id, 'version': 1},
+                'purge_status': 'backup-expiry-pending',
+                'supersedes_through_revision': revision,
+            }
+            validate('tombstone', tombstone)
+            connection.execute('INSERT INTO tombstones VALUES(?,?,?,?,?)',
+                               (avatar, memory_id, row['space'], revision, encode(tombstone)))
+            connection.execute('DELETE FROM memories WHERE avatar=? AND id=?', (avatar, memory_id))
+            connection.execute('DELETE FROM history WHERE avatar=? AND id=?', (avatar, memory_id))
+            connection.executemany('UPDATE deltas SET status=?,body=NULL WHERE avatar=? AND id=?',
+                                   (('invalidated', avatar, delta_id) for delta_id in delta_ids))
+            connection.executemany('UPDATE views SET invalidated=1 WHERE avatar=? AND id=?',
+                                   ((avatar, view_id) for view_id in view_ids))
+            self._rebuild_core(connection, avatar)
+            return {'deleted': True, 'tombstone': tombstone, 'physical_backup_erasure': 'not_guaranteed'}
     def archive_cycle(self):
         # Trusted internal job, not an unauthenticated network operation. No data leaves the service.
         changed=[]

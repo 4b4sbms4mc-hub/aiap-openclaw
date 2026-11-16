@@ -82,8 +82,12 @@ def main():
     parser.add_argument('--release-zip', type=Path, help='Defaults to the current RELEASE.json candidate ZIP')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--conversation-model', help='Optional actual local model identifier; never a mock')
+    parser.add_argument('--delete-handoff-only', action='store_true',
+                        help='Run the deletion handoff as the only conversational probe.')
     parser.add_argument('--model-base-url', default='http://127.0.0.1:1235/v1')
     args = parser.parse_args()
+    if args.delete_handoff_only and not args.conversation_model:
+        parser.error('--delete-handoff-only requires --conversation-model')
     if args.release_zip is None:
         repo = Path(__file__).resolve().parents[1]
         version = json.loads((repo / 'lavida/RELEASE.json').read_text())['plugin_version']
@@ -258,7 +262,31 @@ def main():
                         for excluded in ('AIAP_PENDING', 'AIAP_REJECTED', 'AIAP_PRIVATE_LIFE'):
                             require(not invoke('search', {'query': excluded})['results'], 'excluded content recalled')
                         checks['fresh_pending_rejected_and_space_isolation'] = True
-                    if args.conversation_model:
+                        deletion_marker = 'AIAP_DELETE_HANDOFF'
+                        deletion = invoke('propose', {'text': deletion_marker + ' synthetic preference.'})
+                        client.call('/v1/deltas/decide', {'delta_id': deletion['delta_id'], 'approve': True})
+                        matches = invoke('search', {'query': deletion_marker})['results']
+                        require(len(matches) == 1, 'delete handoff target missing')
+                        target = matches[0]
+                        preview_path = '/v1/memories/delete/preview'
+                        deletion_body = {'memory_id': target['id'], 'space_ref': target['space_ref'],
+                                         'base_revision': target['revision']}
+                        require(http(core_base, preview_path, deletion_body, credential['token'])[0] == 403,
+                                'adapter obtained Owner deletion preview')
+                        if args.conversation_model:
+                            from conversation_probe import verify_delete_handoff
+                            verify_delete_handoff(gateway_base, gateway_token, deletion_marker, deletion_body, require)
+                            checks['fresh_conversation_delete_handoff'] = True
+                        preview = client.call(preview_path, deletion_body)
+                        require(all(preview[key] == value for key, value in deletion_body.items())
+                                and 'content' not in preview
+                                and invoke('search', {'query': deletion_marker})['results'] == matches,
+                                'Owner preview changed the memory or returned the wrong target')
+                        require(client.call('/v1/memories/delete', deletion_body)['deleted']
+                                and not invoke('search', {'query': deletion_marker})['results'],
+                                'deleted memory remained visible through Gateway')
+                        checks['fresh_delete_preview_and_owner_delete'] = True
+                    if args.conversation_model and not args.delete_handoff_only:
                         from conversation_probe import run
                         conversation_expected = run(phase, gateway_base, gateway_token, client,
                             current / 'core', credential, checks, conversation_expected, require)

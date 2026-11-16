@@ -5,7 +5,8 @@ import json
 from pathlib import Path
 from jsonschema import Draft202012Validator, FormatChecker
 
-SCHEMA_DIR = Path(__file__).resolve().parents[2] / "schemas"
+PACKAGE_SCHEMAS = Path(__file__).with_name("schemas")
+SCHEMA_DIR = PACKAGE_SCHEMAS if PACKAGE_SCHEMAS.is_dir() else Path(__file__).resolve().parents[2] / "schemas"
 
 def load_schema(name: str) -> dict:
     return json.loads((SCHEMA_DIR / name).read_text(encoding="utf-8"))

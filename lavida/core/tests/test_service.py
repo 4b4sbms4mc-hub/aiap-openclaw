@@ -136,6 +136,33 @@ class HTTPTests(ServiceTests):
         self.assertEqual(self.client.call('/v1/search',{'space_refs':['space:work'],'purpose':'work-task','query':'HTTP'})['count'],1)
     def test_http_cross_scope_denied(self):
         with self.assertRaisesRegex(RuntimeError,'403'):self.client.call('/v1/search',{'space_refs':['space:life'],'purpose':'work-task','query':''})
+    def test_http_delete_preview_is_read_only_and_matches_delete(self):
+        memory_id = self.add('private preview body')
+        update = self.s.propose(self.work, self.draft('updated preview body', old=self.search()[0]))
+        self.s.decide(self.owner, update['delta_id'], True)
+        pending = self.s.propose(self.work, self.draft('pending preview body', old=self.search()[0]))
+        self.context()
+        path = '/v1/memories/delete/preview'
+        body = {'memory_id': memory_id, 'space_ref': 'space:work', 'base_revision': 2}
+        owner = Client(self.base, self.owner)
+        with self.assertRaisesRegex(RuntimeError, '403 E_DENIED'):
+            self.client.call(path, body)
+        with self.assertRaisesRegex(RuntimeError, '409 E_VERSION_CONFLICT'):
+            owner.call(path, dict(body, base_revision=1))
+        preview = owner.call(path, body)
+        self.assertEqual(preview['history_versions_to_remove'], 1)
+        self.assertEqual(preview['proposals_to_invalidate'], 1)
+        self.assertEqual(preview['views_to_invalidate'], 1)
+        self.assertNotIn('preview body', json.dumps(preview))
+        self.assertEqual(owner.call(path, body), preview)
+        self.assertEqual(self.s.review(self.owner, pending['delta_id'])['status'], 'proposed')
+        self.assertEqual(self.search()[0]['revision'], 2)
+        self.assertTrue(owner.call('/v1/memories/delete', body)['deleted'])
+        self.assertEqual(self.s.review(self.owner, pending['delta_id'])['status'], 'invalidated')
+        with self.s.tx(read_only=True) as connection:
+            self.assertEqual(connection.execute('SELECT count(*) FROM history WHERE id=?',
+                                                (memory_id,)).fetchone()[0], 0)
+            self.assertEqual(connection.execute('SELECT invalidated FROM views').fetchone()[0], 1)
     def test_http_no_token(self):
         with self.assertRaises(urllib.error.HTTPError) as cm:urllib.request.urlopen(self.base+'/v1/core')
         self.assertEqual(cm.exception.code,401)

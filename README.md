@@ -28,7 +28,9 @@ Validation: 66 Core tests + 15 plugin integration checks + 15 automatic-candidat
 
 The [latest protocol design drafts](https://github.com/4b4sbms4mc-hub/ai-avatar-protocol/tree/main/drafts) are versioned separately. Validation runs on relevant PR/main changes. Publishing a new tag is an explicit workflow-dispatch operation; existing 0.3.4 release assets are not overwritten by documentation or test updates.
 
-Multi-member Bundle/Shared Space, organization management, secure cross-runtime transfer, a general MCP memory server and full workflow execution are future work. This release does not claim full AIAP compliance.
+Multi-member Bundle/Shared Space, organization management, secure cross-runtime transfer and full workflow execution are future work. This release does not claim full AIAP compliance.
+
+The reference CLI now has an optional `aiap mcp serve` entry point for a single-space connection to an existing Core over its HTTP API. It exposes authorization status, scoped search, and pending memory proposals through stdio. See the [MCP setup and DeepSeek Harness example](aiap-core/README.md#memory-mcp-stdio).
 
 An experimental repository-only [old-snapshot recovery governance tool](lavida/docs/RECOVERY_GOVERNANCE_CN.md) applies an independently pinned current local checkpoint, excludes deleted/stale records, and revokes all old credentials. Its 22 isolated tests do not establish checkpoint freshness by themselves, production/NAS recovery or secure transfer. Core Service and plugin behavior versions are unchanged by this development helper.
 

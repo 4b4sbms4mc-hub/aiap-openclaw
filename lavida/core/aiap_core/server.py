@@ -42,6 +42,7 @@ class Handler(BaseHTTPRequestHandler):
                 elif self.path=='/v1/deltas/propose':result=s.propose(token,body)
                 elif self.path=='/v1/deltas/review':exact(body,['delta_id']);result=s.review(token,body['delta_id'])
                 elif self.path=='/v1/deltas/decide':exact(body,['delta_id','approve']);result=s.decide(token,body['delta_id'],body['approve'])
+                elif self.path=='/v1/memories/delete/preview':result=s.preview_delete(token,body)
                 elif self.path=='/v1/memories/delete':result=s.delete(token,body)
                 else:raise Fault('E_NOT_FOUND',404)
             self.reply(200,result)
