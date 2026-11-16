@@ -33,10 +33,10 @@ jobs:
           node-version: "24.22.1"
       - name: Install Python dependencies
         run: python -m pip install -r lavida/core/requirements.txt
-      - name: Core tests (66)
+      - name: Core tests (67)
         working-directory: lavida/core
         run: python -m unittest discover -s tests -v
-      - name: Recovery governance, live observation and readiness tests (232)
+      - name: Recovery governance, live observation and readiness tests (233)
         run: python -m unittest discover -s scripts/tests -v
       - name: Install synthetic SSH lab dependency
         run: |

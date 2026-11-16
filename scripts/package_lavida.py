@@ -71,6 +71,7 @@ if opts.ci:
     gateway = json.loads(opts.gateway_report.read_text())
     required = {'release_checksums', 'fresh_archive_install', 'fresh_gateway_auth_and_session',
                 'fresh_propose_owner_approve_recall', 'fresh_pending_rejected_and_space_isolation',
+                'fresh_delete_preview_and_owner_delete',
                 'stopped_snapshot_checksums_and_sqlite', 'original_state_offline_during_restore',
                 'restored_gateway_auth_and_session', 'restored_gateway_recall', 'restored_local_signature',
                 'restored_propose_owner_approve_recall', 'temporary_processes_stopped'}
@@ -83,7 +84,7 @@ if opts.ci:
         raise SystemExit('Gateway evidence does not match this validated commit/version')
     payload['CI_VALIDATION.json'] = (json.dumps({
         'commit': sha, 'workflow_run': f'https://github.com/{repo}/actions/runs/{run}',
-        'core_tests': 66, 'plugin_integration_checks': 15, 'automatic_checks': 15,
+        'core_tests': 67, 'plugin_integration_checks': 15, 'automatic_checks': 15,
         'fresh_core_docker': 'passed', 'core_restart_persistence': 'passed',
         'fresh_openclaw_install': 'passed-real-gateway-http',
         'restored_gateway_core_tool_calls': 'passed-real-gateway-http',

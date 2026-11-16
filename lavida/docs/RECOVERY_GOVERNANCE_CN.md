@@ -55,6 +55,22 @@ python scripts/recovery_guard.py review-checkpoint \
 
 工具接受原始 GOVREAD JSON 或项目账本保存的包装结果。它验证检查点摘要、Owner 签名和有效期，再比对登记摘要、治理摘要、Core 修订号及空间和删除记录数量。`checkpoint-matches-diagnostic` 表示两份资料一致。诊断可能过时，登记与恢复仍需独立可信的当前依据。
 
+Core 源码中的[恢复管理入口](RECOVERY_REGISTRY_CN.md)提供登记、只读核对及基于实时证明的隔离恢复命令。旧脚本的手工 pin 恢复命令不会自动使用登记库或获取实时证明。
+
+## 删除前查看影响
+
+`POST /v1/memories/delete/preview` 使用与删除请求相同的 `memory_id`、`space_ref` 和 `base_revision`。预览需要对目标空间有删除权限的 Owner 凭据，以只读方式统计将移除的历史版本、将失效的待审提案和上下文视图。结果仅包含目标标识和影响数量。旧备份中的物理擦除仍取决于备份保留与清理。
+
+```sh
+docker compose exec core python -m aiap_core delete-preview \
+  --credential-file /data/owner-credentials.json --space space:general \
+  --memory-id MEMORY_ID --base-revision REVISION
+```
+
+预览反映查询时的状态。正式删除会独立验证权限和版本，并重新计算受影响的记录。预览之后新增的待审提案或视图也可能失效。目标版本已变更时，先获取新版本并重新预览。
+
+OpenClaw 中可以先用 La Vida 搜索要删除的记忆。确认目标后，插件提供编号、空间和版本，供操作者在 Core 中运行上述 Owner 命令。
+
 ## 验证结果与来源
 
 本地 22 项恢复测试通过，覆盖删除/旧版本排除、历史与候选正文清理、旧凭据全部失效、新凭据的批准闭环、检查点不含正文或秘密、摘要/签名/时效/身份/行空间篡改、已知回退、未知 Schema、符号链接、已有目标保护及恢复过程中到期的拒绝。实际 CLI 恢复后启动新的 Core HTTP 进程，确认旧 token 返回 401、旧候选不存在而保留记录可查。测试核对源备份文件摘要未变化。
