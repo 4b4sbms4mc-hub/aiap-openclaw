@@ -1,6 +1,6 @@
 {
   "name": "@lavida/aiap-openclaw",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "type": "module",
   "private": true,
   "author": "Wang Lu",

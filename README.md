@@ -7,7 +7,7 @@ AIAP is a runtime-neutral protocol for user-controlled AI state. This repository
 
 | Integration | Version | Purpose |
 |---|---|---|
-| La Vida native memory plugin | 0.3.5 source candidate (published: 0.3.4) | Scoped recall, pending proposals, independent owner approval |
+| La Vida native memory plugin | 0.3.6 source candidate (previous tag: 0.3.5) | Scoped recall, pending proposals, independent owner approval |
 | AIAP Core Service | 0.2.0 | Local identity and persistent memory state used by La Vida |
 | Legacy Agent Plugins bundle | 0.3.0 | AIAP object inspection and MCP validation tools |
 
