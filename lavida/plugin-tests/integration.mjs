@@ -49,6 +49,17 @@ try {
   assert(JSON.stringify(review).includes('inferred'));
   await ownerCall('/v1/deltas/decide',{delta_id:proposal.delta_id,approve:true});
   assert.equal((await a.search({query:'REMEMBER_TEST'})).results.length,1);ok('owner review and approval enables recall');
+  const task=await a.propose({text:'TASK_FIXTURE hypothesis to revisit',level:'M1',memory_type:'project-context'});
+  assert.equal(task.level,'M1');assert.equal(task.source_type,'inferred');
+  assert.equal((await a.search({query:'TASK_FIXTURE'})).results.length,0);
+  await ownerCall('/v1/deltas/decide',{delta_id:task.delta_id,approve:true});
+  const recalled=(await a.search({query:'TASK_FIXTURE'})).results[0];
+  assert.equal(recalled.level,'M1');assert.equal(recalled.memory_type,'project-context');
+  assert.equal(recalled.source_type,'inferred');assert.equal(recalled.confidence,0.5);
+  for (const fields of [{level:'M0'},{level:'M3'},{level:null},{memory_type:'hypothesis'},{confidence:1}]) {
+    await rejects(()=>a.propose({text:'INVALID_FIXTURE',...fields}),'E_ARGUMENTS');
+  }
+  ok('typed task candidates preserve approval, classification and inferred provenance');
   const cred=JSON.parse(await readFile(binding.credentialFile));
   const deny=await fetch(f.baseUrl+'/v1/deltas/decide',{method:'POST',headers:{Authorization:'Bearer '+cred.token,'Content-Type':'application/json'},body:JSON.stringify({delta_id:proposal.delta_id,approve:true})});
   assert.equal(deny.status,403);ok('adapter credential cannot approve');

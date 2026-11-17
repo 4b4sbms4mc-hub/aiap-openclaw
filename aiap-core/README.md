@@ -64,6 +64,10 @@ Configure DeepSeek Harness with the following profile patch. Replace the executa
 
 The three tools expose authorization status, active memory search and pending proposals. Core performs approval separately through the existing Owner workflow. Search excerpts enter the MCP client's tool results and can reach its configured model provider.
 
+The current source MCP and OpenClaw manual proposal tools accept optional `level` (`M1` or `M2`) and `memory_type` fields. Choose M1 for task continuity, unfinished work, blockers and explicitly labeled hypotheses to revisit. Choose M2 for lasting preferences, decisions and knowledge. For example, submit `{"text":"Project X next step is to verify the pending hypothesis from today's investigation.","level":"M1","memory_type":"project-context"}`. Stable preferences use `preference-evidence`; the other supported types are `fact`, `decision`, `event`, `relationship`, `workflow-evidence`, `summary` and `other`.
+
+Include relevant context, source, time and uncertainty in the text. Private information must fit the authorized space and purpose. Exclude passwords, tokens and private keys. These content guidelines are supplied to the runtime; the Core enforces schema, authorization, revisions and independent Owner approval. Manual candidates retain `inferred` provenance and confidence 0.5. Approval authorizes storage and does not establish factual certainty. Search results expose level, type, provenance and confidence. Existing text-only proposals default to M2/fact.
+
 ## Repository layout
 
 ```text
