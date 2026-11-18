@@ -31,9 +31,9 @@ CREATE TABLE IF NOT EXISTS views(id TEXT PRIMARY KEY,avatar TEXT NOT NULL,grant_
 CREATE TABLE IF NOT EXISTS audit(id TEXT PRIMARY KEY,avatar TEXT NOT NULL,space TEXT,event TEXT NOT NULL,object_id TEXT,at TEXT NOT NULL,actor TEXT NOT NULL);
 '''
 class Service:
-    def __init__(self,data_dir,clock=None):
+    def __init__(self,data_dir,clock=None,*,enable_semantic=True):
         from .semantic import Semantic
-        self.semantic=Semantic.from_environment()
+        self.semantic=Semantic.from_environment() if enable_semantic else None
         self.directory=Path(data_dir);self.db=self.directory/'core.sqlite3';self.clock=clock or (lambda:datetime.now(timezone.utc))
     def now(self):return self.clock().astimezone(timezone.utc)
     @contextmanager

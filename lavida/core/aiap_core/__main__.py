@@ -40,7 +40,9 @@ def main():
         if command in ['search','propose']:x.add_argument('--space',required=True)
         if command=='search':x.add_argument('--query',default='');x.add_argument('--include-archived',action='store_true')
         if command=='propose':x.add_argument('--text',required=True);x.add_argument('--pinned',action='store_true')
-        if command in ['review','decide']:x.add_argument('--delta-id',required=True)
+        if command in ['review','decide']:
+            x.add_argument('--delta-id',required=True)
+            x.add_argument('--local',action='store_true',help='Use the private Core directory directly.')
         if command=='decide':x.add_argument('--approve',action='store_true',help='Explicitly approve the reviewed candidate; otherwise reject.')
     args=ap.parse_args()
     if args.command=='recovery':
@@ -62,7 +64,8 @@ def main():
         else:result=registry.status()
         print(json.dumps(result,ensure_ascii=False,indent=2))
         return
-    s=Service(args.data_dir)
+    local=getattr(args,'local',False)
+    s=Service(args.data_dir,enable_semantic=not local)
     if args.command=='init':result=s.initialize()
     elif args.command=='serve':return serve(s,args.host,args.port,args.archive_interval)
     elif args.command=='archive':result=s.archive_cycle()
@@ -73,6 +76,12 @@ def main():
         except Exception:s.revoke_grant(r['grant_id']);raise
         result={'grant_id':r['grant_id'],'credential_file':args.output,'expires_at':r['expires_at']}
     elif args.command=='revoke':s.revoke_grant(args.grant_id);result={'revoked':True}
+    elif local:
+        credential=json.loads(Path(args.credential_file).read_text(encoding='utf-8'))
+        if args.command=='review':
+            result=s.review(credential['token'],args.delta_id)
+        else:
+            result=s.decide(credential['token'],args.delta_id,args.approve)
     elif args.command=='delete-preview':
         credential = json.loads(Path(args.credential_file).read_text(encoding='utf-8'))
         result = Client(args.base_url, credential['token']).call('/v1/memories/delete/preview', {

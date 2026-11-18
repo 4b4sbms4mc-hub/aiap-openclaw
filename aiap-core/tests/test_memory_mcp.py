@@ -6,7 +6,7 @@ from threading import Thread
 from types import SimpleNamespace
 import unittest
 
-from aiap.memory_mcp import _Core, _server
+from aiap.memory_mcp import _Core, _LocalCore, _server
 from aiap_core.contracts import Fault
 from aiap_core.server import Server
 from aiap_core.service import Service, save_private
@@ -14,6 +14,8 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 
 class MemoryAdmissionTests(unittest.IsolatedAsyncioTestCase):
+    local = False
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -25,14 +27,19 @@ class MemoryAdmissionTests(unittest.IsolatedAsyncioTestCase):
         self.adapter = grant['token']
         credential = data / 'adapter.json'
         save_private(credential, json.dumps(grant).encode())
+        args = SimpleNamespace(credential_file=credential, avatar_id=avatar,
+                               space='space:general', purpose='aiap-memory', runtime='fixture')
+        if self.local:
+            args.data_dir = data
+            self.server = _server(_LocalCore(args))
+            return
         http = Server(('127.0.0.1', 0), self.core)
         thread = Thread(target=http.serve_forever, kwargs={'poll_interval': 0.01}, daemon=True)
         thread.start()
         self.addCleanup(http.server_close)
         self.addCleanup(thread.join)
         self.addCleanup(http.shutdown)
-        args = SimpleNamespace(base_url=f'http://127.0.0.1:{http.server_port}', credential_file=credential, avatar_id=avatar,
-                               space='space:general', purpose='aiap-memory', runtime='fixture')
+        args.base_url = f'http://127.0.0.1:{http.server_port}'
         self.server = _server(_Core(args))
 
     async def call(self, name, **arguments):
@@ -66,6 +73,10 @@ class MemoryAdmissionTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ToolError):
                 await self.call('aiap_memory_propose', text='Fixture', **arguments)
         self.assertEqual(self.core.db.read_bytes(), before)
+
+
+class LocalMemoryAdmissionTests(MemoryAdmissionTests):
+    local = True
 
 
 if __name__ == '__main__':
