@@ -24,6 +24,36 @@ pytest
 
 ## Memory MCP (stdio)
 
+### Fresh DSH installation with a local Core
+
+Download both wheels and `SHA256SUMS-MCP.txt` from [AIAP Memory MCP 0.3.3](https://github.com/4b4sbms4mc-hub/aiap-openclaw/releases/tag/aiap-mcp-v0.3.3). Run the following from the download directory on macOS or Linux with Python 3.12.
+
+```sh
+shasum -a 256 -c SHA256SUMS-MCP.txt
+VENV="$HOME/.local/share/aiap-dsh/venv"
+DATA="$HOME/.local/share/aiap-dsh/core"
+python3.12 -m venv "$VENV"
+"$VENV/bin/python" -m pip install ./aiap_core_service-0.2.0-py3-none-any.whl './aiap_reference-0.3.3-py3-none-any.whl[mcp]'
+"$VENV/bin/python" -m aiap_core --data-dir "$DATA" init
+"$VENV/bin/python" -m aiap_core --data-dir "$DATA" grant --spaces space:general \
+  --purpose aiap-memory --runtime deepseek-harness --output "$DATA/adapter.json"
+```
+
+Copy the Avatar ID printed by `init`. In the DSH profile patch below, set `command` to the absolute path of the new environment's `bin/aiap`. Replace `--base-url` and its value with `--data-dir` and the absolute Core directory. Use the new Avatar ID and `adapter.json` in the remaining arguments. DSH launches the MCP process, which opens the local SQLite database. Start by calling `aiap_memory_status` in DSH to check the binding.
+
+When the MCP tool returns a pending proposal ID, review and decide from the Owner terminal. Replace `DELTA_ID` with the returned ID.
+
+```sh
+"$VENV/bin/python" -m aiap_core --data-dir "$DATA" review --local \
+  --credential-file "$DATA/owner-credentials.json" --delta-id DELTA_ID
+"$VENV/bin/python" -m aiap_core --data-dir "$DATA" decide --local \
+  --credential-file "$DATA/owner-credentials.json" --delta-id DELTA_ID --approve
+```
+
+Keep the Owner credential separate from the DSH profile. The adapter grant expires after seven days by default. To renew, run `grant` again with a new output file, then update the credential path in DSH.
+
+### Connecting to an existing Core over HTTP
+
 From the repository root, install the optional SDK with `python -m pip install './aiap-core[mcp]'` in a virtual environment. Run the server with the address of an existing La Vida Core and a separate one-space Adapter credential:
 
 ```sh

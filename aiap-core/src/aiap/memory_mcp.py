@@ -10,6 +10,7 @@ from http.client import HTTPException
 from pathlib import Path
 import re
 import ssl
+import sqlite3
 import stat
 import sys
 from urllib.error import HTTPError
@@ -94,9 +95,8 @@ def _credential(path: Path) -> str:
         raise ToolError("E_CREDENTIAL_FILE") from None
 
 
-class _Core:
+class _Binding:
     def __init__(self, args):
-        self.base = _origin(args.base_url)
         self.credential_file = Path(args.credential_file).absolute()
         self.avatar = args.avatar_id
         self.space = args.space
@@ -105,6 +105,27 @@ class _Core:
         if not (self.avatar.startswith("avatar:") and len(self.avatar) > 7
                 and 0 < len(self.purpose) <= 200 and 0 < len(self.runtime) <= 200):
             raise ValueError("E_BINDING_CONFIG")
+
+    def session(self):
+        token = _credential(self.credential_file)
+        session = self.call(token, "/v1/session")
+        scopes = session.get("scopes")
+        scope = scopes[0] if isinstance(scopes, list) and len(scopes) == 1 else None
+        if (session.get("role") != "adapter" or session.get("avatar_id") != self.avatar
+                or session.get("purpose") != self.purpose or session.get("runtime_ref") != self.runtime
+                or session.get("space_refs") != [self.space] or not isinstance(scope, dict)
+                or scope.get("space_ref") != self.space or scope.get("owner_ref") != session.get("subject_ref")):
+            raise ToolError("E_GRANT_BINDING")
+        for field in ("subject_ref", "auth_evidence_ref", "session_ref", "issued_at", "expires_at"):
+            if not isinstance(session.get(field), str) or not session[field]:
+                raise ToolError("E_CORE_RESPONSE")
+        return token, session
+
+
+class _Core(_Binding):
+    def __init__(self, args):
+        super().__init__(args)
+        self.base = _origin(args.base_url)
         self.opener = build_opener(ProxyHandler({}), _NoRedirect(),
                                    HTTPSHandler(context=ssl.create_default_context()))
 
@@ -130,20 +151,47 @@ class _Core:
         except (ValueError, RecursionError):
             raise ToolError("E_CORE_RESPONSE") from None
 
-    def session(self):
-        token = _credential(self.credential_file)
-        session = self.call(token, "/v1/session")
-        scopes = session.get("scopes")
-        scope = scopes[0] if isinstance(scopes, list) and len(scopes) == 1 else None
-        if (session.get("role") != "adapter" or session.get("avatar_id") != self.avatar
-                or session.get("purpose") != self.purpose or session.get("runtime_ref") != self.runtime
-                or session.get("space_refs") != [self.space] or not isinstance(scope, dict)
-                or scope.get("space_ref") != self.space or scope.get("owner_ref") != session.get("subject_ref")):
-            raise ToolError("E_GRANT_BINDING")
-        for field in ("subject_ref", "auth_evidence_ref", "session_ref", "issued_at", "expires_at"):
-            if not isinstance(session.get(field), str) or not session[field]:
-                raise ToolError("E_CORE_RESPONSE")
-        return token, session
+
+class _LocalCore(_Binding):
+    def __init__(self, args):
+        super().__init__(args)
+        try:
+            from aiap_core.contracts import Fault
+            from aiap_core.service import Service
+        except ModuleNotFoundError as exc:
+            if exc.name != "aiap_core":
+                raise
+            raise ValueError("local mode requires the aiap-core-service package") from None
+
+        directory = Path(args.data_dir).absolute()
+        try:
+            folder = directory.lstat()
+            if not stat.S_ISDIR(folder.st_mode) or folder.st_uid != os.geteuid() or folder.st_mode & 0o077:
+                raise ValueError("E_LOCAL_CORE_DATA")
+            database = (directory / "core.sqlite3").lstat()
+            if not stat.S_ISREG(database.st_mode) or database.st_uid != os.geteuid() or database.st_mode & 0o077:
+                raise ValueError("E_LOCAL_CORE_DATA")
+            self.service = Service(directory, enable_semantic=False)
+            with self.service.tx(read_only=True) as connection:
+                if self.service.meta(connection, "avatar") != self.avatar:
+                    raise ValueError("E_GRANT_BINDING")
+        except (OSError, sqlite3.Error, Fault):
+            raise ValueError("E_LOCAL_CORE_DATA") from None
+        self.fault = Fault
+
+    def call(self, token, endpoint, body=None):
+        try:
+            if endpoint == "/v1/session":
+                return self.service.session(token)
+            if endpoint == "/v1/search":
+                return self.service.search(token, body)
+            if endpoint == "/v1/deltas/propose":
+                return self.service.propose(token, body)
+        except self.fault as exc:
+            raise ToolError(f"E_CORE_LOCAL_{exc.status}") from None
+        except (OSError, sqlite3.Error, ValueError):
+            raise ToolError("E_CORE_LOCAL") from None
+        raise ToolError("E_CORE_ENDPOINT")
 
 
 def _proposal(session, space, text, *, level="M2", memory_type="fact"):
@@ -250,7 +298,7 @@ def _server(core):
 
 def serve(args):
     try:
-        core = _Core(args)
+        core = _LocalCore(args) if args.data_dir is not None else _Core(args)
     except ValueError as exc:
         print(f"aiap mcp serve: {exc}", file=sys.stderr)
         return 2

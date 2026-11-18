@@ -5,9 +5,11 @@ import rfc3339_validator
 from jsonschema import Draft202012Validator,FormatChecker
 from referencing import Registry,Resource
 ROOT=Path(__file__).resolve().parents[1]
+PACKAGED_PROFILE=Path(__file__).resolve().with_name('profile')
+PROFILE_DIR=PACKAGED_PROFILE if PACKAGED_PROFILE.is_dir() else ROOT/'profile'
 REGISTRY=Registry()
 SCHEMAS={}
-for p in sorted((ROOT/'profile').rglob('*.schema.json')):
+for p in sorted(PROFILE_DIR.rglob('*.schema.json')):
     s=json.loads(p.read_text(encoding='utf-8'));Draft202012Validator.check_schema(s)
     if s['$id'] in SCHEMAS and SCHEMAS[s['$id']]!=s:raise RuntimeError('Conflicting schema')
     SCHEMAS[s['$id']]=s;REGISTRY=REGISTRY.with_resource(s['$id'],Resource.from_contents(s))
