@@ -26,20 +26,34 @@ pytest
 
 ### Fresh DSH installation with a local Core
 
-Download both wheels and `SHA256SUMS-MCP.txt` from [AIAP Memory MCP 0.3.3](https://github.com/4b4sbms4mc-hub/aiap-openclaw/releases/tag/aiap-mcp-v0.3.3). Run the following from the download directory on macOS or Linux with Python 3.12.
+Download both wheels and `SHA256SUMS-MCP.txt` from [AIAP Memory MCP 0.3.4](https://github.com/4b4sbms4mc-hub/aiap-openclaw/releases/tag/aiap-mcp-v0.3.4). Use Python 3.12 and run the commands from the download directory.
+
+On macOS and Linux:
 
 ```sh
 shasum -a 256 -c SHA256SUMS-MCP.txt
 VENV="$HOME/.local/share/aiap-dsh/venv"
 DATA="$HOME/.local/share/aiap-dsh/core"
 python3.12 -m venv "$VENV"
-"$VENV/bin/python" -m pip install ./aiap_core_service-0.2.0-py3-none-any.whl './aiap_reference-0.3.3-py3-none-any.whl[mcp]'
+"$VENV/bin/python" -m pip install ./aiap_core_service-0.2.0-py3-none-any.whl './aiap_reference-0.3.4-py3-none-any.whl[mcp]'
 "$VENV/bin/python" -m aiap_core --data-dir "$DATA" init
 "$VENV/bin/python" -m aiap_core --data-dir "$DATA" grant --spaces space:general \
   --purpose aiap-memory --runtime deepseek-harness --output "$DATA/adapter.json"
 ```
 
-Copy the Avatar ID printed by `init`. In the DSH profile patch below, set `command` to the absolute path of the new environment's `bin/aiap`. Replace `--base-url` and its value with `--data-dir` and the absolute Core directory. Use the new Avatar ID and `adapter.json` in the remaining arguments. DSH launches the MCP process, which opens the local SQLite database. Start by calling `aiap_memory_status` in DSH to check the binding.
+On Windows, use PowerShell and keep the Core in your Windows profile:
+
+```powershell
+$Venv = Join-Path $env:LOCALAPPDATA 'AIAP\venv'
+$Data = Join-Path $env:LOCALAPPDATA 'AIAP\core'
+py -3.12 -m venv $Venv
+$Python = Join-Path $Venv 'Scripts\python.exe'
+& $Python -m pip install .\aiap_core_service-0.2.0-py3-none-any.whl '.\aiap_reference-0.3.4-py3-none-any.whl[mcp]'
+& $Python -m aiap_core --data-dir $Data init
+& $Python -m aiap_core --data-dir $Data grant --spaces space:general --purpose aiap-memory --runtime deepseek-harness --output (Join-Path $Data 'adapter.json')
+```
+
+Copy the Avatar ID printed by `init`. In the DSH profile patch below, set `command` to the absolute path of the new environment's `bin/aiap` or `Scripts\aiap.exe` on Windows. In YAML, use single quotes around Windows paths containing backslashes. Replace `--base-url` and its value with `--data-dir` and the absolute Core directory. Use the new Avatar ID and `adapter.json` in the remaining arguments. DSH launches the MCP process, which opens the local SQLite database. Start by calling `aiap_memory_status` in DSH to check the binding.
 
 When the MCP tool returns a pending proposal ID, review and decide from the Owner terminal. Replace `DELTA_ID` with the returned ID.
 
@@ -52,6 +66,8 @@ When the MCP tool returns a pending proposal ID, review and decide from the Owne
 
 Keep the Owner credential separate from the DSH profile. The adapter grant expires after seven days by default. To renew, run `grant` again with a new output file, then update the credential path in DSH.
 
+For Owner commands in Windows PowerShell, use `& $Python` as the executable and `$Data` as the data directory. If you initialized the Core with 0.3.3, install the 0.3.4 MCP wheel in the same environment and reuse your existing data directory and credentials.
+
 ### Connecting to an existing Core over HTTP
 
 From the repository root, install the optional SDK with `python -m pip install './aiap-core[mcp]'` in a virtual environment. Run the server with the address of an existing La Vida Core and a separate one-space Adapter credential:
@@ -63,7 +79,7 @@ aiap mcp serve --base-url http://127.0.0.1:8042 \
   --purpose aiap-memory --runtime deepseek-harness
 ```
 
-Use the same Avatar, space, purpose and runtime that the Core grant was issued for. Store the credential in a regular file owned by the MCP process user with mode `0600`. The Core origin must use HTTPS or loopback HTTP, such as a local Core or a local tunnel to the NAS.
+Use the same Avatar, space, purpose and runtime that the Core grant was issued for. Store the credential in a private regular file. On macOS and Linux, use mode `0600` and the MCP process user's ownership. On Windows, use your Windows profile's private permissions. The ACL may grant access to your account, SYSTEM and local Administrators. The Core origin must use HTTPS or loopback HTTP, such as a local Core or a local tunnel to the NAS.
 
 Configure DeepSeek Harness with the following profile patch. Replace the executable and credential paths and the Avatar ID with your own values.
 

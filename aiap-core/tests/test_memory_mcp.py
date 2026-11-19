@@ -1,16 +1,21 @@
 """Exercise typed MCP candidates against a temporary local Core."""
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 from threading import Thread
 from types import SimpleNamespace
 import unittest
 
-from aiap.memory_mcp import _Core, _LocalCore, _server
+from aiap.memory_mcp import _Core, _LocalCore, _credential, _server
 from aiap_core.contracts import Fault
 from aiap_core.server import Server
 from aiap_core.service import Service, save_private
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 
 
 class MemoryAdmissionTests(unittest.IsolatedAsyncioTestCase):
@@ -77,6 +82,71 @@ class MemoryAdmissionTests(unittest.IsolatedAsyncioTestCase):
 
 class LocalMemoryAdmissionTests(MemoryAdmissionTests):
     local = True
+
+
+class InstalledLocalMCPTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stdio_launch_and_recall_after_local_owner_approval(self):
+        with tempfile.TemporaryDirectory(prefix='AIAP Windows and POSIX ') as directory:
+            data = Path(directory) / 'private core'
+            core_cli = [sys.executable, '-m', 'aiap_core', '--data-dir', str(data)]
+            avatar = json.loads(subprocess.check_output([*core_cli, 'init'], timeout=15))['avatar_id']
+            credential = data / 'adapter.json'
+            subprocess.check_output([*core_cli, 'grant', '--spaces', 'space:general',
+                                     '--purpose', 'aiap-memory', '--runtime', 'deepseek-harness',
+                                     '--output', str(credential)], timeout=15)
+            parameters = StdioServerParameters(
+                command=sys.executable,
+                args=['-m', 'aiap.cli', 'mcp', 'serve', '--data-dir', str(data), '--avatar-id', avatar,
+                      '--credential-file', str(credential), '--space', 'space:general',
+                      '--purpose', 'aiap-memory', '--runtime', 'deepseek-harness'],
+                env={'PYTHONPATH': os.environ['PYTHONPATH']} if 'PYTHONPATH' in os.environ else None,
+            )
+
+            async def call(session, tool, arguments=None):
+                result = await session.call_tool(tool, arguments)
+                self.assertFalse(result.is_error, result.content)
+                return result.structured_content or json.loads(result.content[0].text)
+
+            query = 'Fixture task for platform compatibility'
+            async with stdio_client(parameters) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    self.assertTrue((await call(session, 'aiap_memory_status'))['ok'])
+                    proposal = await call(session, 'aiap_memory_propose',
+                                          {'text': query, 'level': 'M1', 'memory_type': 'project-context'})
+                    self.assertEqual((await call(session, 'aiap_memory_search', {'query': query}))['results'], [])
+
+            decision = json.loads(subprocess.check_output(
+                [*core_cli, 'decide', '--local', '--credential-file', str(data / 'owner-credentials.json'),
+                 '--delta-id', proposal['delta_id'], '--approve'], timeout=15,
+            ))
+            self.assertEqual(decision['status'], 'accepted')
+            async with stdio_client(parameters) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    results = (await call(session, 'aiap_memory_search', {'query': query}))['results']
+                    self.assertEqual([(r['content'], r['level']) for r in results], [(query, 'M1')])
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows ACLs')
+    def test_windows_rejects_credential_with_public_acl(self):
+        import win32con
+        import win32security
+
+        with tempfile.TemporaryDirectory() as directory:
+            credential = Path(directory) / 'adapter.json'
+            token = 'fixture-token-with-allowed-characters'
+            save_private(credential, json.dumps({'role': 'adapter', 'token': token}).encode())
+            self.assertEqual(_credential(credential), token)
+            path = str(credential)
+            obj = win32security.SE_FILE_OBJECT
+            info = win32security.DACL_SECURITY_INFORMATION
+            original = win32security.GetNamedSecurityInfo(path, obj, info)
+            acl = original.GetSecurityDescriptorDacl()
+            acl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_READ,
+                                    win32security.CreateWellKnownSid(win32security.WinWorldSid, None))
+            win32security.SetNamedSecurityInfo(path, obj, info, None, None, acl, None)
+            with self.assertRaisesRegex(ToolError, 'E_CREDENTIAL_FILE'):
+                _credential(credential)
 
 
 if __name__ == '__main__':

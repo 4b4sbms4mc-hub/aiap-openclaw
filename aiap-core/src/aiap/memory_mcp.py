@@ -70,18 +70,32 @@ def _origin(value: str) -> str:
     return f"{url.scheme}://{url.netloc}"
 
 
+def _check_posix_private(info, *, directory: bool = False):
+    kind = stat.S_ISDIR if directory else stat.S_ISREG
+    if not kind(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+        raise ValueError
+
+
+def _read_credential(path: Path) -> bytes:
+    if os.name == "nt":
+        from ._windows_files import read_private
+
+        return read_private(path, CREDENTIAL_LIMIT)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        _check_posix_private(info)
+        if info.st_size > CREDENTIAL_LIMIT:
+            raise ValueError
+        with os.fdopen(fd, "rb", closefd=False) as stream:
+            return stream.read(CREDENTIAL_LIMIT + 1)
+    finally:
+        os.close(fd)
+
+
 def _credential(path: Path) -> str:
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        try:
-            info = os.fstat(fd)
-            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
-                    or info.st_mode & 0o077 or info.st_size > CREDENTIAL_LIMIT):
-                raise ValueError
-            with os.fdopen(fd, "rb", closefd=False) as stream:
-                raw = stream.read(CREDENTIAL_LIMIT + 1)
-        finally:
-            os.close(fd)
+        raw = _read_credential(path)
         if len(raw) > CREDENTIAL_LIMIT:
             raise ValueError
         data = json.loads(raw.decode("utf-8"))
@@ -165,12 +179,18 @@ class _LocalCore(_Binding):
 
         directory = Path(args.data_dir).absolute()
         try:
-            folder = directory.lstat()
-            if not stat.S_ISDIR(folder.st_mode) or folder.st_uid != os.geteuid() or folder.st_mode & 0o077:
-                raise ValueError("E_LOCAL_CORE_DATA")
-            database = (directory / "core.sqlite3").lstat()
-            if not stat.S_ISREG(database.st_mode) or database.st_uid != os.geteuid() or database.st_mode & 0o077:
-                raise ValueError("E_LOCAL_CORE_DATA")
+            database = directory / "core.sqlite3"
+            if os.name == "nt":
+                from ._windows_files import check_private
+
+                check_private(directory, directory=True)
+                check_private(database)
+            else:
+                _check_posix_private(directory.lstat(), directory=True)
+                _check_posix_private(database.lstat())
+        except (OSError, ValueError):
+            raise ValueError("E_LOCAL_CORE_DATA") from None
+        try:
             self.service = Service(directory, enable_semantic=False)
             with self.service.tx(read_only=True) as connection:
                 if self.service.meta(connection, "avatar") != self.avatar:
