@@ -13,7 +13,7 @@ class Server(ThreadingHTTPServer):
     daemon_threads=True
     def __init__(self,address,service):self.service=service;super().__init__(address,Handler)
 class Handler(BaseHTTPRequestHandler):
-    server_version='AIAP-Core/0.2.0'
+    server_version='AIAP-Core/0.2.1'
     def setup(self):super().setup();self.connection.settimeout(10)
     def log_message(self,*args):pass
     def reply(self,status,data):
@@ -23,7 +23,7 @@ class Handler(BaseHTTPRequestHandler):
     def run_request(self):
         try:
             require(not self.headers.get('Origin'),'E_ORIGIN',403)
-            if self.command=='GET' and self.path=='/health':return self.reply(200,{'service':'aiap-core','version':'0.2.0','initialized':self.server.service.db.exists()})
+            if self.command=='GET' and self.path=='/health':return self.reply(200,{'service':'aiap-core','version':'0.2.1','initialized':self.server.service.db.exists()})
             auth=self.headers.get('Authorization','');require(auth.startswith('Bearer '),'E_IDENTITY',401);token=auth[7:];s=self.server.service
             if self.command=='GET':
                 if self.path=='/v1/session':result=s.session(token)

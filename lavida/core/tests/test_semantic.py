@@ -38,7 +38,7 @@ class SemanticTests(unittest.TestCase):
     def test_provider_failure_explicit_fallback(self):
         self.setup_engine();self.add('work travel')
         def down(*a):raise ProviderUnavailable('E_EMBED_UNAVAILABLE')
-        self.engine.embed=down;r=self.query();self.assertTrue(r['degraded']);self.assertEqual(r['retrieval'],'scoped-literal-substring');self.assertEqual(len(r['items']),1)
+        self.engine.embed=down;r=self.query();self.assertTrue(r['degraded']);self.assertEqual(r['retrieval'],'scoped-offline-bm25');self.assertEqual(len(r['items']),1)
     def test_revocation_during_embedding_no_result(self):
         self.setup_engine();self.add('work travel');grant=self.s.session(self.work)['auth_evidence_ref']
         original=self.engine.embed
@@ -56,6 +56,23 @@ class SemanticTests(unittest.TestCase):
         self.setup_engine();mid=self.add('work travel');self.query()
         with self.s.tx() as c:c.execute('DELETE FROM memories WHERE id=?',(mid,))
         self.assertEqual(self.query()['items'],[])
+    def test_task_only_recall_filters_before_embedding_and_during_fallback(self):
+        self.setup_engine()
+        task = self.add('travel task', level='M1')
+        self.add('travel preference', level='M2')
+        result = self.query(level='M1', limit=1)
+        self.assertEqual([item['memory_id'] for item in result['items']], [task])
+        self.assertNotIn('travel preference', self.sent)
+
+        def unavailable(*args):
+            raise ProviderUnavailable('E_EMBED_UNAVAILABLE')
+        self.engine.embed = unavailable
+        result = self.query(level='M1')
+        self.assertTrue(result['degraded'])
+        self.assertEqual([item['memory_id'] for item in result['items']], [task])
+        self.fault('E_SCHEMA', lambda: self.query(level='M3'))
+        self.fault('E_SCHEMA', lambda: self.query(level=None))
+
     def test_archived_excluded_before_embedding(self):
         self.setup_engine();mid=self.add('old travel');self.add('new travel')
         with self.s.tx() as c:
@@ -68,6 +85,42 @@ class SemanticTests(unittest.TestCase):
         self.setup_engine();self.fault('E_SCHEMA',lambda:self.query(limit=True));self.fault('E_SCHEMA',lambda:self.query(endpoint='http://bad'))
 
 class ProviderTests(unittest.TestCase):
+    def test_openai_embedding_reorders_by_index_and_rejects_duplicates(self):
+        requests = []
+        indices = [1, 0]
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                requests.append((self.path, body))
+                raw = json.dumps({'model': 'fixture-embed', 'data': [
+                    {'index': index, 'embedding': vector}
+                    for index, vector in zip(indices, [[0, 3], [2, 0]])
+                ]}).encode()
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(raw)
+
+        http = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=http.serve_forever, daemon=True)
+        thread.start()
+        try:
+            engine = Semantic(f'http://127.0.0.1:{http.server_port}', ['space:work'],
+                              'fixture-embed', dimensions=2, provider='openai')
+            self.assertEqual(engine.embed(['one', 'two'], time.monotonic() + 5), [[1, 0], [0, 1]])
+            self.assertEqual(requests[0], ('/v1/embeddings', {
+                'model': 'fixture-embed', 'input': ['one', 'two'], 'encoding_format': 'float',
+            }))
+            indices[:] = [0, 0]
+            with self.assertRaises(ProviderUnavailable):
+                engine.embed(['one', 'two'], time.monotonic() + 5)
+        finally:
+            http.shutdown()
+            http.server_close()
+
     def test_real_http_transport_validation_and_redirect(self):
         events=[];mode=['ok']
         class Handler(BaseHTTPRequestHandler):

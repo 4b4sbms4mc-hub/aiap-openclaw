@@ -8,7 +8,7 @@ AIAP is a runtime-neutral protocol for user-controlled AI state. This repository
 | Integration | Version | Purpose |
 |---|---|---|
 | La Vida native memory plugin | 0.3.6 source candidate (previous tag: 0.3.5) | Scoped recall, pending proposals, independent owner approval |
-| AIAP Core Service | 0.2.0 | Local identity and persistent memory state used by La Vida |
+| AIAP Core Service | 0.2.1 | Local identity and persistent memory state used by La Vida |
 | Legacy Agent Plugins bundle | 0.3.0 | AIAP object inspection and MCP validation tools |
 
 ## First usable memory release
@@ -18,7 +18,7 @@ The experimental La Vida release is in [lavida/](lavida/README.md).
 
 The initial loop is: an authenticated owner session proposes a memory; the owner reviews and approves or rejects it outside the plugin; approved memories become searchable and survive restart. Pending/rejected candidates are not active memories.
 
-Default entry: one owner, one fixed space per adapter binding, literal search, manual requests, automatic proposals off and background archival off. Existing optional semantic/automatic functionality is retained.
+Default entry: one owner, one fixed space per adapter binding, offline BM25 search with exact matches first, manual requests, automatic proposals off and background archival off. Existing optional semantic/automatic functionality is retained.
 
 The three native tools are `aiap_memory_status`, `aiap_memory_search`, and `aiap_memory_propose`.
 Tested target: OpenClaw 2026.9.4, Node 24.22.1, Core Service 0.2.0. The plugin itself needs Node 22+ with node:sqlite; the pinned host requires >=24.16.0 <25 or >=26.1.0.
