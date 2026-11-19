@@ -219,12 +219,12 @@ class ExperimentalGatedService(Service):
         raise Fault('E_OPERATION_UNSUPPORTED')  # enrollment requires a separately initialized Core
 
     @contextmanager
-    def tx(self):
+    def tx(self, *, read_only=False):
         with self.gate._lock():
             w, checkpoint_name = self.gate._load()
             require(w._pending is None, 'E_WITNESS_PENDING')
             changed = False
-            with super().tx() as db:
+            with super().tx(read_only=read_only) as db:
                 before = bound_digest(db, w)
                 require(before == w.head['governance_sha256'], 'E_SOURCE_DIVERGED')
                 yield db
