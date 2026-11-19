@@ -4,7 +4,7 @@ import sqlite3
 import unicodedata
 
 HAN = r"\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U000323af"
-RUNS = re.compile(fr"[{HAN}]+|[^\W_{HAN}]+")
+RUNS = re.compile(fr"[{HAN}]+|[^\W{HAN}]+")
 METHOD = "scoped-offline-bm25"
 
 
@@ -26,7 +26,7 @@ def rank(records, query, limit):
     if tokens and len(exact) <= limit and len(exact) < len(records):
         db = sqlite3.connect(":memory:")
         try:
-            db.execute("CREATE VIRTUAL TABLE corpus USING fts5(tokens)")
+            db.execute("CREATE VIRTUAL TABLE corpus USING fts5(tokens, tokenize='unicode61 tokenchars _')")
             db.executemany("INSERT INTO corpus(rowid,tokens) VALUES (?,?)",
                            ((i, " ".join(terms(m["content"]))) for i, m in enumerate(records)))
             expression = " OR ".join(f'"{token}"' for token in tokens)

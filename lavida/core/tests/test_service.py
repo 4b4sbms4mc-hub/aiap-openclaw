@@ -106,6 +106,14 @@ class ServiceTests(unittest.TestCase):
         revised, = self.search(include_archived=True)
         self.assertEqual((revised['content'], revised['level']), ('Correction', 'M3'))
 
+    def test_offline_recall_keeps_underscored_identifiers_distinct(self):
+        accepted = self.add('AIAP_ACCEPTED decision')
+        self.s.propose(self.work, self.draft('AIAP_PENDING candidate'))
+        body = {'space_refs': ['space:work'], 'purpose': 'work-task', 'query': 'AIAP_PENDING'}
+        self.assertEqual(self.s.search(self.work, body)['items'], [])
+        self.assertEqual([m['memory_id'] for m in self.s.search(
+            self.work, {**body, 'query': 'AIAP_ACCEPTED 要怎么做'})['items']], [accepted])
+
     def test_offline_chinese_recall_and_correction(self):
         text = '签合同前，请法律顾问逐条复核。'
         ident = self.add(text)
