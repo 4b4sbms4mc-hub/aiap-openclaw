@@ -22,14 +22,283 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(cm.exception.code,code)
     def test_initial_identity_and_signature(self):
         r=self.s.core(self.owner);validate('avatar-core',r['avatar_core']);self.assertTrue(self.s.verify_local_core(r['avatar_core'],r['local_enrollment']))
+
+    def test_local_reactivation_restarts_archive_period_without_recording_use(self):
+        memory_id = self.add('Old task fixture', level='M1')
+        self.now += timedelta(days=31)
+        self.assertEqual(self.s.archive_cycle()['archived'], 1)
+        owner = self.s.issue_grant(['space:work'], 'review', 'owner-local', role='owner', days=30)['token']
+        original, = self.search(token=owner, include_archived=True)
+        self.assertEqual(self.search(token=owner), [])
+        proposal_result = self.s.propose_lifecycle(owner, 'space:work', memory_id, original['revision'],
+                                                   kind='reactivate', reason='Task resumed')
+        self.assertEqual(self.search(token=owner), [])
+        self.s.decide(owner, proposal_result['delta_id'], True, allow_lifecycle=True)
+        reactivated, = self.search(token=owner)
+        self.assertEqual(reactivated['level'], 'M1')
+        self.assertEqual(reactivated['source'], original['source'])
+        self.assertEqual(reactivated['lifecycle'], original['lifecycle'])
+        self.assertEqual(reactivated['retention']['last_transition']['from'], 'M3')
+        self.now += timedelta(days=29)
+        self.assertEqual(self.s.archive_cycle()['archived'], 0)
+        self.now += timedelta(days=1)
+        self.assertEqual(self.s.archive_cycle()['archived'], 1)
+
+    def test_promotion_starts_full_m2_period_only_after_approval(self):
+        memory_id = self.add('Project decision', level='M1')
+        self.now += timedelta(days=35)
+        owner = self.s.issue_grant(['space:work'], 'review', 'fixture', role='owner')['token']
+        original, = self.search(token=owner)
+        pending = self.s.propose_lifecycle(owner, 'space:work', memory_id, original['revision'],
+                                           kind='promote', reason='Decision adopted for future projects')
+        self.assertEqual(self.s.archive_cycle(dry_run=True)['eligible'], 1)
+        self.now += timedelta(days=1)
+        self.s.decide(owner, pending['delta_id'], True, allow_lifecycle=True)
+        promoted, = self.search(token=owner)
+        self.assertEqual(promoted['level'], 'M2')
+        self.assertEqual(promoted['lifecycle'], original['lifecycle'])
+        self.now += timedelta(days=180, microseconds=-1)
+        self.assertEqual(self.s.archive_cycle()['archived'], 0)
+        self.now += timedelta(microseconds=1)
+        self.assertEqual(self.s.archive_cycle(dry_run=True)['eligible'], 1)
+        self.assertEqual(self.s.archive_cycle()['archived'], 1)
+
+    def test_archive_waits_when_clock_precedes_promotion(self):
+        memory_id = self.add('Long-running decision', level='M1')
+        self.now += timedelta(days=200)
+        owner = self.s.issue_grant(['space:work'], 'review', 'fixture', role='owner')['token']
+        pending = self.s.propose_lifecycle(owner, 'space:work', memory_id, 1,
+                                           kind='promote', reason='Long-term decision')
+        self.s.decide(owner, pending['delta_id'], True, allow_lifecycle=True)
+        self.now -= timedelta(days=1)
+        self.assertEqual(self.s.archive_cycle(dry_run=True)['eligible'], 0)
+        self.assertEqual(self.s.archive_cycle()['archived'], 0)
+        self.now += timedelta(days=181)
+        self.assertEqual(self.s.archive_cycle()['archived'], 1)
+
+    def test_text_correction_preserves_policy_without_aliasing_original(self):
+        self.add('Original preference', pinned=True)
+        original, = self.search()
+        draft = self.draft('Corrected preference', old=original)
+        candidate = draft['delta']['changes'][0]['candidate']
+        for field in ('type', 'retention', 'lifecycle'):
+            self.assertEqual(candidate[field], original[field])
+        self.assertIsNot(candidate['retention'], original['retention'])
+        self.assertIsNot(candidate['lifecycle']['active_task_refs'], original['lifecycle']['active_task_refs'])
+        pending = self.s.propose(self.work, draft)
+        self.s.decide(self.owner, pending['delta_id'], True)
+        corrected, = self.search()
+        self.assertEqual(corrected['retention'], original['retention'])
+        self.assertTrue(corrected['lifecycle']['stable_preference'])
+
+    def test_ordinary_edit_preserves_archived_level(self):
+        ident = self.add('Task draft', level='M1')
+        archive = self.s.propose_lifecycle(self.owner, 'space:work', ident, 1,
+                                           kind='archive', reason='Finished')
+        self.s.decide(self.owner, archive['delta_id'], True, allow_lifecycle=True)
+        old, = self.search(include_archived=True)
+        for level in ('M1', 'M2'):
+            invalid = self.draft('Correction', old=old, level=level)
+            self.fault('E_LIFECYCLE_TRANSITION', lambda: self.s.propose(self.work, invalid))
+        edit = self.s.propose(self.work, self.draft('Correction', old=old))
+        self.s.decide(self.owner, edit['delta_id'], True)
+        self.assertEqual(self.search(), [])
+        revised, = self.search(include_archived=True)
+        self.assertEqual((revised['content'], revised['level']), ('Correction', 'M3'))
+
+    def test_offline_recall_keeps_underscored_identifiers_distinct(self):
+        accepted = self.add('AIAP_ACCEPTED decision')
+        self.s.propose(self.work, self.draft('AIAP_PENDING candidate'))
+        body = {'space_refs': ['space:work'], 'purpose': 'work-task', 'query': 'AIAP_PENDING'}
+        self.assertEqual(self.s.search(self.work, body)['items'], [])
+        self.assertEqual([m['memory_id'] for m in self.s.search(
+            self.work, {**body, 'query': 'AIAP_ACCEPTED 要怎么做'})['items']], [accepted])
+
+    def test_offline_chinese_recall_and_correction(self):
+        text = '签合同前，请法律顾问逐条复核。'
+        ident = self.add(text)
+        self.add('合同要谁复核', token=self.life, space='space:life')
+        self.s.propose(self.work, self.draft('合同要谁复核'))
+        body = {'space_refs': ['space:work'], 'purpose': 'work-task', 'query': '合同要谁复核'}
+        self.assertNotIn(body['query'], text)
+        result = self.s.search(self.work, body)
+        self.assertEqual(result['retrieval'], 'scoped-offline-bm25')
+        self.assertEqual([item['memory_id'] for item in result['items']], [ident])
+        self.assertEqual(self.s.search(self.work, {**body, 'query': '律师审协议'})['items'], [])
+        exact = self.add(body['query'])
+        limited = self.s.search(self.work, {**body, 'limit': 1})
+        self.assertEqual(limited['items'][0]['memory_id'], exact)
+        self.assertTrue(limited['possibly_more'])
+        edit = self.s.propose(self.work, self.draft('会议已经结束', old=result['items'][0]))
+        self.s.decide(self.owner, edit['delta_id'], True)
+        self.assertEqual([m['memory_id'] for m in self.s.search(self.work, body)['items']], [exact])
+
+    def test_local_compact_core_keeps_one_reference_per_space(self):
+        before = self.s.compact_core(self.owner)['avatar_core']
+        self.assertEqual(len(before['state_index']), 3)
+        self.fault('E_DENIED', lambda: self.s.compact_core(self.work))
+        restricted = self.s.issue_grant(['space:work'], 'compact-view', 'test-owner', role='owner')['token']
+        self.fault('E_DENIED', lambda: self.s.compact_core(restricted))
+        for index in range(12):
+            self.add(f'compact-private-text-{index}')
+        full = self.s.core(self.owner)['avatar_core']
+        compact = self.s.compact_core(self.owner)['avatar_core']
+        self.assertEqual(len(compact['state_index']), 3)
+        self.assertLess(len(canonical(compact)), len(canonical(before)) + 32)
+        self.assertNotIn(b'compact-private-text', canonical(compact))
+        self.assertEqual(compact, self.s.compact_core(self.owner)['avatar_core'])
+        self.assertEqual(len(full['state_index']), 12)
+        self.assertEqual(full, self.s.core(self.owner)['avatar_core'])
+        work = next(ref for ref in compact['state_index'] if ref['scope']['space_ref'] == 'space:work')
+        resolved = self.s.compact_core(self.owner, space='space:work', revision=compact['revision'])
+        self.assertEqual(work['sha256'], resolved['sha256'])
+        self.assertEqual(resolved['manifest']['entries'], full['state_index'])
+        self.assertEqual(resolved['manifest']['core_revision'], work['version'])
+        self.fault('E_VERSION_CONFLICT', lambda: self.s.compact_core(self.owner, space='space:work',
+                                                                    revision=before['revision']))
+
+    def test_local_profile_summary_requires_owner_and_approved_short_pinned_source(self):
+        work_id = self.add('Short approved summary for work', pinned=True)
+        other_id = self.add('Another approved summary in work', pinned=True)
+        ordinary_id = self.add('Ordinary work memory')
+        long_id = self.add('X' * 1025, pinned=True)
+        proposal_result = self.s.propose(self.work, self.draft('Pending summary', pinned=True))
+        pending_id = self.s.review(self.owner, proposal_result['delta_id'])['candidate']['bindings'][0]['target_object_id']
+        scoped_owner = self.s.issue_grant(['space:work'], 'summary-review', 'test-owner', role='owner')['token']
+        result = self.s.compact_core(self.owner, summary_ids=[work_id])['avatar_core']
+        selected, = result['profile_summary']
+        self.assertEqual(selected['id'], work_id)
+        self.assertNotIn('Short approved summary', json.dumps(result))
+        self.assertEqual(self.s.compact_core(self.owner)['avatar_core']['profile_summary'], [])
+        self.assertEqual(self.s.core(self.owner)['avatar_core']['profile_summary'], [])
+        read = self.s.read_profile_summary(scoped_owner, 'space:work', work_id, selected['version'])
+        self.assertEqual(read, {'reference': selected, 'text': 'Short approved summary for work'})
+        self.fault('E_DENIED', lambda: self.s.read_profile_summary(self.work, 'space:work', work_id, 1))
+        self.fault('E_DENIED', lambda: self.s.read_profile_summary(scoped_owner, 'space:life', work_id, 1))
+        self.fault('E_VERSION_CONFLICT', lambda: self.s.read_profile_summary(scoped_owner, 'space:work', work_id, 2))
+        self.fault('E_SUMMARY_SOURCE', lambda: self.s.compact_core(self.owner, summary_ids=[work_id, other_id]))
+        self.fault('E_SUMMARY_SOURCE', lambda: self.s.compact_core(self.owner, summary_ids=[ordinary_id]))
+        self.fault('E_SUMMARY_SOURCE', lambda: self.s.compact_core(self.owner, summary_ids=[long_id]))
+        self.fault('E_NOT_FOUND', lambda: self.s.compact_core(self.owner, summary_ids=[pending_id]))
+        self.s.delete(self.owner, {'memory_id': work_id, 'space_ref': 'space:work', 'base_revision': 1})
+        self.fault('E_NOT_FOUND', lambda: self.s.read_profile_summary(scoped_owner, 'space:work', work_id, 1))
+
+    def test_saved_profile_summary_selection_is_scoped_and_expires_on_edit(self):
+        work_id = self.add('Work source text', pinned=True)
+        life_id = self.add('Life source text', space='space:life', token=self.life, pinned=True)
+        limited = self.s.issue_grant(['space:work'], 'summary-selection', 'test-owner', role='owner')['token']
+        self.fault('E_DENIED', lambda: self.s.set_summary_selection(self.work, 'space:work', memory_id=work_id, revision=1))
+        self.fault('E_DENIED', lambda: self.s.set_summary_selection(limited, 'space:life'))
+        self.fault('E_VERSION_CONFLICT', lambda: self.s.set_summary_selection(limited, 'space:work', memory_id=work_id,
+                                                                             revision=2))
+        self.s.set_summary_selection(limited, 'space:work', memory_id=work_id, revision=1)
+        self.s.set_summary_selection(self.owner, 'space:life', memory_id=life_id, revision=1)
+        file = Path(self.tmp.name) / 'profile-summary-selections.json'
+        self.assertEqual(file.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn('source text', file.read_text())
+        reopened = Service(self.tmp.name, clock=lambda: self.now, enable_semantic=False)
+        def summary_ids(result):
+            return [ref['id'] for ref in result['avatar_core']['profile_summary']]
+        self.assertEqual(summary_ids(reopened.compact_core(self.owner)), [life_id, work_id])
+        self.assertEqual(reopened.read_profile_summary(limited, 'space:work')['text'], 'Work source text')
+        self.fault('E_DENIED', lambda: reopened.read_profile_summary(limited, 'space:life'))
+        self.assertEqual(summary_ids(reopened.compact_core(self.owner, summary_ids=[work_id])), [work_id])
+        self.assertEqual(reopened.core(self.owner)['avatar_core']['profile_summary'], [])
+        update = self.s.propose(self.work, self.draft('Work source update', old=self.search()[0], pinned=True))
+        self.s.decide(self.owner, update['delta_id'], True)
+        filtered = reopened.compact_core(self.owner)
+        self.assertEqual(filtered['stale_summary_spaces'], ['space:work'])
+        self.assertEqual(summary_ids(filtered), [life_id])
+        self.fault('E_VERSION_CONFLICT', lambda: reopened.read_profile_summary(limited, 'space:work'))
+        self.assertEqual(reopened.set_summary_selection(limited, 'space:work')['selection'], None)
+        self.fault('E_NOT_FOUND', lambda: reopened.read_profile_summary(limited, 'space:work'))
+        self.assertNotIn('stale_summary_spaces', reopened.compact_core(self.owner))
+        file.chmod(0o644)
+        self.fault('E_SUMMARY_SELECTION_FILE', lambda: reopened.compact_core(self.owner))
+
     def test_init_no_overwrite(self):self.fault('E_ALREADY_INITIALIZED',self.s.initialize)
     def test_token_hash_only_in_database(self):
         with sqlite3.connect(self.s.db) as c:rows=str(c.execute('SELECT * FROM grants').fetchall())
         self.assertNotIn(self.owner,rows);self.assertNotIn(self.work,rows)
+    def test_local_grant_inventory_pages_and_status(self):
+        first = self.s.list_grants(role='adapter', limit=1)
+        second = self.s.list_grants(role='adapter', after=first['next_after'], limit=1)
+        self.assertIsNone(second['next_after'])
+        work = self.s.grant_status(self.work)
+        life = self.s.grant_status(self.life)
+        by_id = {item['grant_id']: item for item in first['grants'] + second['grants']}
+        self.assertEqual(list(by_id), sorted([work['grant_id'], life['grant_id']]))
+        self.assertEqual(by_id[work['grant_id']], {**work, 'runtime_ref': 'test-work', 'purpose': 'work-task'})
+        self.assertEqual(self.s.list_grants(role='owner')['grants'][0]['role'], 'owner')
+        self.fault('E_SCHEMA', lambda: self.s.list_grants(limit=101))
+        self.fault('E_SCHEMA', lambda: self.s.list_grants(role='other'))
+        self.now -= timedelta(seconds=1)
+        self.assertEqual({item['status'] for item in self.s.list_grants()['grants']}, {'not-yet-valid'})
+        self.s.revoke_grant(life['grant_id'])
+        self.now += timedelta(days=7, seconds=1)
+        statuses = {item['grant_id']: item['status'] for item in self.s.list_grants(role='adapter')['grants']}
+        self.assertEqual(statuses, {work['grant_id']: 'expired', life['grant_id']: 'revoked'})
+        self.assertEqual(self.s.grant_status(self.work)['status'], 'expired')
+
+    def test_local_reissue_preserves_grant_permissions(self):
+        original = self.s.session(self.work)
+        grant_id = original['auth_evidence_ref']
+        self.now -= timedelta(seconds=1)
+        self.fault('E_GRANT_NOT_REISSUABLE', lambda: self.s.reissue_grant(grant_id))
+        self.now += timedelta(seconds=1)
+        self.fault('E_SCHEMA', lambda: self.s.reissue_grant(grant_id, days=31))
+        active = self.s.reissue_grant(grant_id, days=30)
+        replacement = self.s.session(active['token'])
+        for field in ('avatar_id', 'subject_ref', 'role', 'space_refs', 'purpose', 'runtime_ref', 'actions'):
+            self.assertEqual(original[field], replacement[field])
+        self.assertNotEqual(original['auth_evidence_ref'], replacement['auth_evidence_ref'])
+        self.assertNotEqual(original['session_ref'], replacement['session_ref'])
+        self.assertEqual(self.s.grant_status(self.work)['status'], 'active')
+        self.now += timedelta(days=7)
+        self.assertEqual(self.s.grant_status(self.work)['status'], 'expired')
+        expired = self.s.reissue_grant(grant_id)
+        self.assertEqual(self.s.grant_status(expired['token'])['status'], 'active')
+        self.s.revoke_grant(grant_id)
+        self.fault('E_GRANT_NOT_REISSUABLE', lambda: self.s.reissue_grant(grant_id))
+        self.assertEqual(self.s.grant_status(active['token'])['status'], 'active')
+        self.assertEqual(self.s.grant_status(expired['token'])['status'], 'active')
+
     def test_untrusted_token(self):self.fault('E_IDENTITY',lambda:self.s.session('x'*43))
     def test_adapter_no_full_core(self):self.fault('E_DENIED',lambda:self.s.core(self.work))
     def test_no_implicit_general(self):self.fault('E_DENIED',lambda:self.search(space='space:general'))
     def test_pending_not_searchable(self):self.s.propose(self.work,self.draft());self.assertEqual(self.search(),[])
+
+    def test_local_audit_pagination_and_space_boundary(self):
+        limited = self.s.issue_grant(['space:work'], 'audit-review', 'test-owner', role='owner')['token']
+        work_id = self.add('synthetic-work-secret')
+        life_id = self.add('synthetic-life-secret', space='space:life', token=self.life)
+        self.s.delete(self.owner, {'memory_id': work_id, 'space_ref': 'space:work', 'base_revision': 1})
+        self.now += timedelta(seconds=1)
+        self.s.delete(self.owner, {'memory_id': life_id, 'space_ref': 'space:life', 'base_revision': 1})
+        listing = self.s.list_audit(self.owner)['events']
+        self.assertEqual(listing[0]['object_id'], life_id)
+        self.assertIn('delta-accepted', {event['event'] for event in listing})
+        self.assertIn('credential-issued', {event['event'] for event in listing})
+        first = self.s.list_audit(self.owner, limit=2)
+        second = self.s.list_audit(self.owner, before=first['next_before'], limit=2)
+        self.assertEqual(first['events'] + second['events'], listing[:4])
+        self.assertEqual(second['next_before'], second['events'][-1]['audit_id'])
+        work_events = self.s.list_audit(limited)['events']
+        self.assertEqual(work_events, self.s.list_audit(self.owner, space='space:work')['events'])
+        self.assertEqual([(event['event'], event['object_id']) for event in work_events], [('memory-deleted', work_id)])
+        self.fault('E_NOT_FOUND', lambda: self.s.list_audit(limited, before=listing[0]['audit_id']))
+        first_delete = self.s.list_audit(self.owner, event='memory-deleted', limit=1)
+        second_delete = self.s.list_audit(self.owner, event='memory-deleted', before=first_delete['next_before'])
+        self.assertEqual([event['object_id'] for event in first_delete['events'] + second_delete['events']],
+                         [life_id, work_id])
+        self.assertEqual(self.s.list_audit(limited, object_id=life_id)['events'], [])
+        self.assertEqual(self.s.list_audit(self.owner, event='memory-deleted', object_id=work_id)['events'], work_events)
+        self.fault('E_NOT_FOUND', lambda: self.s.list_audit(self.owner, event='credential-issued',
+                                                          before=first_delete['next_before']))
+        self.fault('E_DENIED', lambda: self.s.list_audit(limited, space='space:life'))
+        self.fault('E_DENIED', lambda: self.s.list_audit(self.work))
+        self.assertNotIn('synthetic-', json.dumps(listing))
+
     def test_owner_approval_persists(self):self.add();self.assertEqual(self.search()[0]['content'],'work fact')
     def test_inferred_requires_owner(self):
         p=self.draft(source_type='inferred');r=self.s.propose(self.work,p);self.assertEqual(self.search(),[]);self.s.decide(self.owner,r['delta_id'],True);m=self.search()[0];self.assertEqual(m['source']['source_type'],'inferred');self.assertFalse(m['source']['verified'])
@@ -97,8 +366,53 @@ class ServiceTests(unittest.TestCase):
             allrows=''.join(str(c.execute('SELECT * FROM '+t).fetchall()) for t in ['memories','history','deltas','audit','cores','tombstones'])
         self.assertNotIn('UNIQUE_DELETE_BODY',allrows)
     def test_archive_ordinary_but_protect_pinned(self):
-        self.add('ordinary');self.add('pinned',pinned=True);self.now+=timedelta(days=181);self.assertEqual(self.s.archive_cycle()['archived'],1)
+        ordinary_id = self.add('ordinary')
+        self.add('pinned', pinned=True)
+        self.now += timedelta(days=181)
+        before = self.s.db.read_bytes()
+        preview = self.s.archive_cycle(dry_run=True)
+        self.assertEqual(preview['eligible'], 1)
+        self.assertFalse(preview['possibly_more'])
+        self.assertEqual(preview['candidates'], [{'memory_id': ordinary_id, 'space_ref': 'space:work',
+                                                  'base_revision': 1, 'from_level': 'M2', 'to_level': 'M3',
+                                                  'eligible_since': '2027-03-18T00:00:00.000000Z'}])
+        self.assertEqual(self.s.db.read_bytes(), before)
+        self.assertEqual(self.s.archive_cycle()['archived'], preview['eligible'])
+        self.assertEqual(self.s.archive_cycle(dry_run=True)['candidates'], [])
         t=self.s.issue_grant(['space:work'],'work-task','test-work')['token'];ms=self.search(token=t,include_archived=True);self.assertEqual({m['content']:m['level'] for m in ms},{'ordinary':'M3','pinned':'M2'})
+    def test_expected_use_protection_ends_after_scheduled_time(self):
+        draft = self.draft(level='M1')
+        scheduled = self.now + timedelta(days=35)
+        draft['delta']['changes'][0]['candidate']['lifecycle']['expected_next_use'] = scheduled.isoformat()
+        pending = self.s.propose(self.work, draft)
+        self.s.decide(self.owner, pending['delta_id'], True)
+        self.now += timedelta(days=31)
+        self.assertEqual(self.s.archive_cycle()['archived'], 0)
+        self.now = scheduled
+        self.assertEqual(self.s.archive_cycle(dry_run=True)['eligible'], 0)
+        self.now += timedelta(microseconds=1)
+        candidate, = self.s.archive_cycle(dry_run=True)['candidates']
+        self.assertEqual(datetime.fromisoformat(candidate['eligible_since'].replace('Z', '+00:00')), self.now)
+        self.assertEqual(self.s.archive_cycle()['archived'], 1)
+
+    def test_approved_correction_restarts_task_archive_window(self):
+        self.add('original task', level='M1')
+        self.now += timedelta(days=31)
+        token = self.s.issue_grant(['space:work'], 'work-task', 'fixture')['token']
+        owner = self.s.issue_grant(['space:work'], 'review', 'fixture-owner', role='owner')['token']
+        old, = self.search(token=token)
+        draft = self.draft('corrected task', old=old, token=token, level='M1')
+        pending = self.s.propose(token, draft)
+        self.assertEqual(self.s.archive_cycle(dry_run=True)['eligible'], 1)
+        self.s.decide(owner, pending['delta_id'], True)
+        corrected, = self.search(token=token)
+        self.assertIsNone(corrected['lifecycle']['last_used_at'])
+        self.now += timedelta(days=30, microseconds=-1)
+        self.assertEqual(self.s.archive_cycle()['archived'], 0)
+        self.now += timedelta(microseconds=1)
+        self.assertEqual(self.s.archive_cycle(dry_run=True)['eligible'], 1)
+        self.assertEqual(self.s.archive_cycle()['archived'], 1)
+
     def test_recurrence_protected(self):
         p=self.draft();p['delta']['changes'][0]['candidate']['lifecycle']['recurrence_ref']='annual:review';r=self.s.propose(self.work,p);self.s.decide(self.owner,r['delta_id'],True);self.now+=timedelta(days=400);self.assertEqual(self.s.archive_cycle()['archived'],0)
     def test_search_not_counted_as_use(self):self.add();self.search();self.assertIsNone(self.search()[0]['lifecycle']['last_used_at'])
@@ -111,6 +425,26 @@ class ServiceTests(unittest.TestCase):
         self.add();v=self.context()['authorized_view'];self.now+=timedelta(minutes=6);self.fault('E_EXPIRED',lambda:self.s.acknowledge(self.work,{'view_id':v['view_id']}))
     def test_context_no_life_leak(self):
         self.add('private!',space='space:life',token=self.life);self.add('work');v=self.context();self.assertNotIn('private!',json.dumps(v));validate('authorized-view',v['authorized_view'])
+    def test_corrected_preference_review_and_level_scoped_context(self):
+        original = self.add('Use method A', pinned=True)
+        self.add('Finish current task', level='M1')
+        old, = self.search(level='M2')
+        draft = self.draft('Use method B', old=old, pinned=True, source_type='inferred')
+        delta_id = self.s.propose(self.work, draft)['delta_id']
+        preview, = self.s.review(self.owner, delta_id, changes=True)['changes']
+        self.assertEqual(preview['current_classification']['reported_source_type'], 'explicit-user')
+        self.assertEqual(preview['proposed_classification'], {
+            'level': 'M2', 'type': 'preference-evidence', 'reported_source_type': 'inferred',
+            'stable_preference': True, 'confidence': 0.5})
+        self.assertEqual([m['content'] for m in self.search(level='M2')], ['Use method A'])
+        self.s.decide(self.owner, delta_id, True)
+        result = self.s.search(self.work, {'space_refs': ['space:work'], 'purpose': 'work-task',
+                                          'query': '', 'level': 'M2'}, context=True)
+        self.assertEqual([m['content'] for m in result['items']], ['Use method B'])
+        self.assertEqual([r['id'] for r in result['authorized_view']['objects']], [original])
+        self.assertEqual(self.s.memory_history(self.owner, 'space:work', original, revision=1)['record']['content'],
+                         'Use method A')
+
     def test_update_preserves_previous_version(self):
         self.add('previous');old=self.search()[0];p=self.draft('current',old=old);self.s.propose(self.work,p);self.s.decide(self.owner,p['delta']['delta_id'],True)
         with sqlite3.connect(self.s.db) as c:prior=json.loads(c.execute('SELECT body FROM history WHERE id=?',(old['memory_id'],)).fetchone()[0])

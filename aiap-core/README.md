@@ -26,7 +26,7 @@ pytest
 
 ### Fresh DSH installation with a local Core
 
-Download both wheels and `SHA256SUMS-MCP.txt` from [AIAP Memory MCP 0.3.4](https://github.com/4b4sbms4mc-hub/aiap-openclaw/releases/tag/aiap-mcp-v0.3.4). Use Python 3.12 and run the commands from the download directory.
+Download both wheels and `SHA256SUMS-MCP.txt` from [AIAP Memory MCP 0.3.5](https://github.com/4b4sbms4mc-hub/aiap-openclaw/releases/tag/aiap-mcp-v0.3.5). Use Python 3.12 and run the commands from the download directory.
 
 On macOS and Linux:
 
@@ -35,7 +35,7 @@ shasum -a 256 -c SHA256SUMS-MCP.txt
 VENV="$HOME/.local/share/aiap-dsh/venv"
 DATA="$HOME/.local/share/aiap-dsh/core"
 python3.12 -m venv "$VENV"
-"$VENV/bin/python" -m pip install ./aiap_core_service-0.2.0-py3-none-any.whl './aiap_reference-0.3.4-py3-none-any.whl[mcp]'
+"$VENV/bin/python" -m pip install ./aiap_core_service-0.2.1-py3-none-any.whl './aiap_reference-0.3.5-py3-none-any.whl[mcp]'
 "$VENV/bin/python" -m aiap_core --data-dir "$DATA" init
 "$VENV/bin/python" -m aiap_core --data-dir "$DATA" grant --spaces space:general \
   --purpose aiap-memory --runtime deepseek-harness --output "$DATA/adapter.json"
@@ -48,7 +48,7 @@ $Venv = Join-Path $env:LOCALAPPDATA 'AIAP\venv'
 $Data = Join-Path $env:LOCALAPPDATA 'AIAP\core'
 py -3.12 -m venv $Venv
 $Python = Join-Path $Venv 'Scripts\python.exe'
-& $Python -m pip install .\aiap_core_service-0.2.0-py3-none-any.whl '.\aiap_reference-0.3.4-py3-none-any.whl[mcp]'
+& $Python -m pip install .\aiap_core_service-0.2.1-py3-none-any.whl '.\aiap_reference-0.3.5-py3-none-any.whl[mcp]'
 & $Python -m aiap_core --data-dir $Data init
 & $Python -m aiap_core --data-dir $Data grant --spaces space:general --purpose aiap-memory --runtime deepseek-harness --output (Join-Path $Data 'adapter.json')
 ```
@@ -66,7 +66,18 @@ When the MCP tool returns a pending proposal ID, review and decide from the Owne
 
 Keep the Owner credential separate from the DSH profile. The adapter grant expires after seven days by default. To renew, run `grant` again with a new output file, then update the credential path in DSH.
 
-For Owner commands in Windows PowerShell, use `& $Python` as the executable and `$Data` as the data directory. If you initialized the Core with 0.3.3, install the 0.3.4 MCP wheel in the same environment and reuse your existing data directory and credentials.
+For Owner commands in Windows PowerShell, use `& $Python` as the executable and `$Data` as the data directory. For an existing local installation, install both new wheels and reuse the same Core data directory and credential files.
+
+#### macOS system embeddings
+
+On macOS, install the Core wheel with the optional bridge using `"$VENV/bin/python" -m pip install './aiap_core_service-0.2.1-py3-none-any.whl[system-embedding]'`.
+On macOS 14 or later, add `--system-embedding-language zh-Hans` to the local MCP server arguments, or set `AIAP_SYSTEM_EMBED_LANG=zh-Hans` and `AIAP_EMBED_SPACES=space:general` on a standalone Core server. Use the locale that best matches the indexed space. An explicit HTTP embedding endpoint takes precedence in the standalone server.
+
+Run `aiap embedding status --language zh-Hans` to check whether the system model is available. If Apple reports missing assets, the MCP status and degraded search include the command `aiap embedding download --language zh-Hans`. This command asks macOS to download its own assets. Searches use offline BM25 while the system model is unavailable.
+
+The active model and revision identify the vector representation. The backend pools token vectors and normalizes the result locally. All vectors in a query use the configured language and model. Use separate retrieval configurations for separate language groups when needed. System embeddings currently support the macOS runtime. On other platforms, use offline BM25 or the supported HTTP embedding configuration.
+
+To enable hybrid semantic retrieval in local mode, add `--embedding-url http://127.0.0.1:1234 --embedding-model qwen3-embedding-0.6b` to the MCP command arguments, with the origin and model ID from your trusted local OpenAI-compatible embedding server. The server receives the query and approved memory text from the adapter's authorized space. Use `--embedding-dimensions` if the model's vector size differs from 1024. Search results report `retrieval`, `embedding_model` and any `semantic_unavailable` reason. With embeddings disabled or unavailable, Core prioritizes exact substrings and ranks additional matches with SQLite FTS5 BM25 over Chinese character pairs and word tokens. The in-memory index is built from eligible records in the authorized space for the current query. SQLite builds without FTS5 retain exact substring matching.
 
 ### Connecting to an existing Core over HTTP
 

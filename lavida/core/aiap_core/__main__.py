@@ -1,16 +1,195 @@
-import argparse,json,os
+import argparse,json,os,re,stat,sys,uuid
 from pathlib import Path
-from .service import Service,save_private
+from tempfile import TemporaryDirectory
+from .service import Service, save_private
 from .server import serve
 from .client import Client,proposal
-from .contracts import canonical,Fault
+from .contracts import canonical,Fault,require
+
+_LIFECYCLE_COMMANDS = {
+    'propose-promotion': ('promote', 'Propose promoting one local M1 memory to M2 as Owner.'),
+    'propose-reactivation': ('reactivate', 'Propose reactivating one local M3 memory as M1.'),
+    'propose-archive': ('archive', 'Propose archiving one local M1 or M2 memory as M3.'),
+}
+
+_SESSION_EXCERPT_LIMIT = 16000
+
+def _read_grant_token(path):
+    limit = 64 * 1024
+    try:
+        if os.name == 'nt':
+            from aiap._windows_files import read_private
+            data = read_private(Path(path), limit)
+        else:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            try:
+                metadata = os.fstat(fd)
+                require(stat.S_ISREG(metadata.st_mode) and metadata.st_size <= limit, 'E_CREDENTIAL_FILE')
+                with os.fdopen(fd, 'rb', closefd=False) as stream:
+                    data = stream.read(limit + 1)
+            finally:
+                os.close(fd)
+        require(len(data) <= limit, 'E_CREDENTIAL_FILE')
+        credential = json.loads(data.decode('utf-8'))
+        require(isinstance(credential, dict), 'E_CREDENTIAL_FILE')
+        token = credential.get('token')
+        require(isinstance(token, str) and 20 <= len(token) <= 200, 'E_CREDENTIAL_FILE')
+        return token
+    except (OSError, ValueError, RecursionError, ImportError):
+        raise Fault('E_CREDENTIAL_FILE') from None
+
+
+def _add_recall_options(parser):
+    parser.add_argument('--query', default='')
+    parser.add_argument('--include-archived', action='store_true')
+    parser.add_argument('--level', choices=('M1', 'M2', 'M3'),
+                        help='Recall a single level. M3 also requires --include-archived.')
+
+
+def _search_request(args, session):
+    request = {'space_refs': [args.space], 'purpose': session['purpose'], 'query': args.query,
+               'include_archived': args.include_archived}
+    if args.level is not None:
+        request['level'] = args.level
+    return request
+
+
+def _read_session_excerpt():
+    max_bytes = _SESSION_EXCERPT_LIMIT * 4
+    raw = sys.stdin.buffer.read(max_bytes + 1)
+    require(len(raw) <= max_bytes, 'E_SESSION_EXCERPT')
+    try:
+        excerpt = raw.decode('utf-8')
+    except UnicodeDecodeError:
+        raise Fault('E_SESSION_EXCERPT') from None
+    require(bool(excerpt.strip()) and len(excerpt) <= _SESSION_EXCERPT_LIMIT and '\x00' not in excerpt,
+            'E_SESSION_EXCERPT')
+    return excerpt
+
 
 def main():
-    ap=argparse.ArgumentParser(description='AIAP Core Service 0.2.0 — Wang Lu');ap.add_argument('--data-dir',default=os.environ.get('AIAP_DATA_DIR','./data'));sp=ap.add_subparsers(dest='command',required=True)
+    ap=argparse.ArgumentParser(description='AIAP Core Service 0.2.1 — Wang Lu');ap.add_argument('--data-dir',default=os.environ.get('AIAP_DATA_DIR','./data'));sp=ap.add_subparsers(dest='command',required=True)
     sp.add_parser('init',help='Initialize once without overwriting an existing identity.')
     sv=sp.add_parser('serve');sv.add_argument('--host',default='127.0.0.1');sv.add_argument('--port',type=int,default=8042);sv.add_argument('--archive-interval',type=int,default=3600)
     g=sp.add_parser('grant');g.add_argument('--spaces',nargs='+',required=True);g.add_argument('--purpose',required=True);g.add_argument('--runtime',required=True);g.add_argument('--role',choices=['adapter','owner'],default='adapter');g.add_argument('--days',type=int,default=7);g.add_argument('--output',required=True)
-    rev=sp.add_parser('revoke');rev.add_argument('--grant-id',required=True);sp.add_parser('archive')
+    reissue = sp.add_parser('grant-reissue', help='Issue a fresh local credential with the same permissions.')
+    reissue.add_argument('--grant-id', required=True)
+    reissue.add_argument('--days', type=int, default=7)
+    reissue.add_argument('--output', required=True, help='New credential path.')
+    grant_status = sp.add_parser('grant-status', help='Inspect a local credential without changing its grant.')
+    grant_status.add_argument('--credential-file', required=True)
+    grants = sp.add_parser('grants', help='List grant metadata as the local Core operator.')
+    grants.add_argument('--role', choices=('owner', 'adapter'))
+    grants.add_argument('--after', help='Continue from the previous page’s next_after value.')
+    grants.add_argument('--limit', type=int, default=20)
+    pending = sp.add_parser('pending', help='List local proposals awaiting an Owner decision.')
+    pending.add_argument('--credential-file', required=True)
+    pending.add_argument('--space', help='Show proposals that include this space.')
+    pending.add_argument('--after', help='Continue from the previous page’s next_after value.')
+    pending.add_argument('--limit', type=int, default=20)
+    procedural_commands = {'capability': '--capability-id', 'workflow': '--workflow-id', 'runtime-binding': '--binding-id'}
+    for kind, id_option in procedural_commands.items():
+        descriptor = sp.add_parser(kind, help=f'Manage local {kind} descriptors as Owner.')
+        descriptor_commands = descriptor.add_subparsers(dest='descriptor_command', required=True)
+        put_descriptor = descriptor_commands.add_parser('put', help=f'Save a local {kind} descriptor.')
+        put_descriptor.add_argument('--file', required=True)
+        put_descriptor.add_argument('--base-revision', type=int, required=True, help='Use zero for a new descriptor.')
+        get_descriptor = descriptor_commands.add_parser('get', help=f'Read an authorized {kind} descriptor.')
+        get_descriptor.add_argument(id_option, dest='descriptor_id', required=True)
+        list_descriptor = descriptor_commands.add_parser('list', help=f'List {kind} metadata in one Owner space.')
+        list_descriptor.add_argument('--after', help='Continue from the previous page’s next_after value.')
+        list_descriptor.add_argument('--limit', type=int, default=20)
+        operations = [put_descriptor, get_descriptor, list_descriptor]
+        if kind in ('capability', 'workflow'):
+            resolve = descriptor_commands.add_parser('resolve', help=f'Evaluate local Runtime bindings for a {kind}.')
+            resolve.add_argument(id_option, dest='descriptor_id', required=True)
+            resolve.add_argument('--runtime-id', required=True)
+            resolve.add_argument('--runtime-version')
+            resolve.add_argument('--agent-inventory', help='JSON file listing the target Agent’s available implementations.')
+            operations.append(resolve)
+        for operation in operations:
+            operation.add_argument('--credential-file', required=True)
+            operation.add_argument('--space', required=True)
+    capture = sp.add_parser('capture-session', help='Propose one selected UTF-8 session excerpt from stdin as M1.')
+    capture.add_argument('--credential-file', required=True)
+    capture.add_argument('--space', required=True)
+    capture.add_argument('--preview', action='store_true', help='Validate input and show its scope without submitting it.')
+    capture.add_argument('--capture-id', help='Reuse a caller-chosen ID to retry the same capture.')
+    context = sp.add_parser('context', help='Compile a short-lived authorized view from local memories.')
+    context.add_argument('--credential-file', required=True)
+    context.add_argument('--space', required=True)
+    _add_recall_options(context)
+    context.add_argument('--limit', type=int, default=20)
+    acknowledge = sp.add_parser('context-ack', help='Record use of a local authorized view.')
+    acknowledge.add_argument('--credential-file', required=True)
+    acknowledge.add_argument('--view-id', required=True)
+    confirm_use = sp.add_parser('confirm-use', help='Record Owner-confirmed usefulness for one local memory.')
+    confirm_use.add_argument('--credential-file', required=True)
+    confirm_use.add_argument('--space', required=True)
+    confirm_use.add_argument('--memory-id', required=True)
+    confirm_use.add_argument('--base-revision', type=int, required=True)
+    for command, (_, help_text) in _LIFECYCLE_COMMANDS.items():
+        transition = sp.add_parser(command, help=help_text)
+        transition.add_argument('--credential-file', required=True)
+        transition.add_argument('--space', required=True)
+        transition.add_argument('--memory-id', required=True)
+        transition.add_argument('--base-revision', type=int, required=True)
+        transition.add_argument('--reason', required=True)
+    summary = sp.add_parser('summary', help='Count local memories and pending proposals by Owner space.')
+    summary.add_argument('--credential-file', required=True)
+    summary.add_argument('--space', help='Limit counts to one authorized space.')
+    compact = sp.add_parser('compact-core', help='Show the local compact Core projection as Owner.')
+    compact.add_argument('--credential-file', required=True)
+    compact.add_argument('--summary-memory', action='append', default=[], metavar='MEMORY_ID',
+                         help='Include an approved pinned M2 memory as a summary reference. Repeat for distinct spaces.')
+    profile_summary = sp.add_parser('profile-summary', help='Read a selected local summary source as Owner.')
+    profile_summary.add_argument('--credential-file', required=True)
+    profile_summary.add_argument('--space', required=True)
+    profile_summary.add_argument('--memory-id', help='Read this source instead of the saved one, with --revision.')
+    profile_summary.add_argument('--revision', type=int, help='Current source revision, with --memory-id.')
+    select_summary = sp.add_parser('profile-summary-select', help='Save a local summary source for one Owner space.')
+    select_summary.add_argument('--memory-id', required=True)
+    select_summary.add_argument('--revision', type=int, required=True)
+    clear_summary = sp.add_parser('profile-summary-clear', help='Clear the saved local summary source for one Owner space.')
+    for selector in (select_summary, clear_summary):
+        selector.add_argument('--credential-file', required=True)
+        selector.add_argument('--space', required=True)
+    manifest = sp.add_parser('compact-manifest', help='Read one space manifest from the current compact Core revision.')
+    manifest.add_argument('--credential-file', required=True)
+    manifest.add_argument('--space', required=True)
+    manifest.add_argument('--core-revision', type=int, required=True)
+    history = sp.add_parser('history', help='List local memory revisions or read one revision as Owner.')
+    history.add_argument('--credential-file', required=True)
+    history.add_argument('--space', required=True)
+    history.add_argument('--memory-id', required=True)
+    history_mode = history.add_mutually_exclusive_group()
+    history_mode.add_argument('--revision', type=int, help='Read one revision instead of listing revisions.')
+    history_mode.add_argument('--before', type=int, help='Continue from the previous page’s next_before value.')
+    history.add_argument('--limit', type=int, default=20, help='Maximum revisions per page.')
+    audit = sp.add_parser('audit', help='List local audit events visible to an Owner.')
+    audit.add_argument('--credential-file', required=True)
+    audit.add_argument('--space', help='Filter to events recorded for this space.')
+    audit.add_argument('--event', help='Filter by exact event name.')
+    audit.add_argument('--object-id', help='Filter by exact proposal, memory or grant ID.')
+    audit.add_argument('--before', help='Continue from the previous page’s next_before value.')
+    audit.add_argument('--limit', type=int, default=20)
+    sync = sp.add_parser('sync', help='Prepare signed memory snapshots for another Core.')
+    sync_commands = sync.add_subparsers(dest='sync_command', required=True)
+    identity = sync_commands.add_parser('identity', help='Show the local enrollment fingerprint.')
+    export = sync_commands.add_parser('export', help='Export one space to a private signed file.')
+    preview = sync_commands.add_parser('preview', help='Verify a signed bundle against the receiving Core.')
+    for command_parser in (identity, export, preview):
+        command_parser.add_argument('--credential-file', required=True)
+    for command_parser in (export, preview):
+        command_parser.add_argument('--space', required=True, help='Source Core space.')
+        command_parser.add_argument('--target-space', required=True)
+    export.add_argument('--target-enrollment-sha256', required=True)
+    export.add_argument('--output', required=True)
+    preview.add_argument('--bundle', required=True)
+    preview.add_argument('--source-enrollment-sha256', required=True)
+    rev=sp.add_parser('revoke');rev.add_argument('--grant-id',required=True)
+    archive = sp.add_parser('archive', help='Run or preview automatic local archive rules.')
+    archive.add_argument('--dry-run', action='store_true', help='Count and preview eligible records without changing them.')
     recovery=sp.add_parser('recovery',help='Manage checkpoints and create isolated recovery copies.')
     recovery.add_argument('--registry-dir',required=True,help='Private registry directory outside Core data and backups.')
     rc=recovery.add_subparsers(dest='recovery_command',required=True)
@@ -30,21 +209,73 @@ def main():
     isolated.add_argument('--snapshot-sha256',required=True,help='Independently recorded SQLite backup SHA-256.')
     isolated.add_argument('--target',required=True,help='New private directory outside source, backup and registry.')
     delete_preview = sp.add_parser('delete-preview', help='Preview the impact of deleting one memory.')
-    delete_preview.add_argument('--credential-file', required=True)
-    delete_preview.add_argument('--base-url', default='http://127.0.0.1:8042')
-    delete_preview.add_argument('--memory-id', required=True)
-    delete_preview.add_argument('--space', required=True)
-    delete_preview.add_argument('--base-revision', type=int, required=True)
+    preview_transport = delete_preview.add_mutually_exclusive_group()
+    preview_transport.add_argument('--base-url', default='http://127.0.0.1:8042')
+    preview_transport.add_argument('--local', action='store_true', help='Use the Core data directory directly.')
+    delete = sp.add_parser('delete', help='Delete one memory from the local Core.')
+    delete.add_argument('--local', action='store_true', required=True, help='Use the Core data directory directly.')
+    delete.add_argument('--confirm', action='store_true', required=True, help='Confirm deletion at the specified revision.')
+    for command_parser in (delete_preview, delete):
+        command_parser.add_argument('--credential-file', required=True)
+        command_parser.add_argument('--memory-id', required=True)
+        command_parser.add_argument('--space', required=True)
+        command_parser.add_argument('--base-revision', type=int, required=True)
     for command in ['session','core','search','propose','review','decide','demo']:
-        x=sp.add_parser(command);x.add_argument('--credential-file',required=True);x.add_argument('--base-url',default='http://127.0.0.1:8042')
+        x=sp.add_parser(command);x.add_argument('--credential-file',required=True)
+        local_supported = command in ('search', 'propose', 'review', 'decide')
+        transport=x.add_mutually_exclusive_group() if local_supported else x
+        transport.add_argument('--base-url',default='http://127.0.0.1:8042')
+        if local_supported:transport.add_argument('--local',action='store_true',help='Use the Core data directory directly without starting an HTTP service.')
         if command in ['search','propose']:x.add_argument('--space',required=True)
-        if command=='search':x.add_argument('--query',default='');x.add_argument('--include-archived',action='store_true')
-        if command=='propose':x.add_argument('--text',required=True);x.add_argument('--pinned',action='store_true')
-        if command in ['review','decide']:
-            x.add_argument('--delta-id',required=True)
-            x.add_argument('--local',action='store_true',help='Use the private Core directory directly.')
+        if command == 'search':
+            _add_recall_options(x)
+        if command == 'propose':
+            proposal_content = x.add_mutually_exclusive_group(required=True)
+            proposal_content.add_argument('--text')
+            proposal_content.add_argument('--from-revision', type=int, help='Use the text of an earlier local revision as Owner.')
+            x.add_argument('--pinned', action='store_true')
+            x.add_argument('--level', choices=('M1', 'M2'), help='Set an initial level for a new local memory.')
+            x.add_argument('--memory-id', help='Existing memory to update locally.')
+            x.add_argument('--base-revision', type=int, help='Expected current revision of the memory.')
+        if command in ['review','decide']:x.add_argument('--delta-id',required=True)
+        if command == 'review':
+            x.add_argument('--changes', action='store_true', help='Preview proposed text and revisions in local mode.')
         if command=='decide':x.add_argument('--approve',action='store_true',help='Explicitly approve the reviewed candidate; otherwise reject.')
     args=ap.parse_args()
+    if args.command in ('search', 'context') and args.level == 'M3' and not args.include_archived:
+        ap.error('--level M3 requires --include-archived')
+    if args.command == 'profile-summary' and (args.memory_id is None) != (args.revision is None):
+        ap.error('--memory-id and --revision must be supplied together')
+    if args.command == 'review' and args.changes and not args.local:
+        ap.error('--changes requires --local')
+    if args.command == 'propose' and args.level is not None and (not args.local or args.memory_id is not None):
+        ap.error('--level is only available for a new local memory')
+    if args.command == 'propose' and any(value is not None for value in
+                                         (args.memory_id, args.base_revision, args.from_revision)):
+        if not args.local or not args.memory_id or args.base_revision is None or args.base_revision < 1:
+            ap.error('updating a memory requires --local, --memory-id and a positive --base-revision')
+        if args.pinned:
+            ap.error('updates preserve the existing pin setting')
+        if args.from_revision is not None and not 1 <= args.from_revision < args.base_revision:
+            ap.error('--from-revision must be positive and earlier than --base-revision')
+    if args.command == 'sync':
+        from .contracts import digest
+        from .memory_sync import export_memory, preview_memory
+        service = Service(args.data_dir, enable_semantic=False)
+        token = _read_grant_token(args.credential_file)
+        if args.sync_command == 'identity':
+            with service.tx(read_only=True) as connection:
+                grant = service._grant(connection, token)
+                require(grant['role'] == 'owner', 'E_DENIED', 403)
+                result = {'enrollment_sha256': digest(service.meta(connection, 'enrollment'))}
+        elif args.sync_command == 'export':
+            result = export_memory(service, token, args.space, args.target_space,
+                                   args.target_enrollment_sha256, args.output)
+        else:
+            result = preview_memory(service, token, args.bundle, args.source_enrollment_sha256,
+                                    args.space, args.target_space)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
     if args.command=='recovery':
         from .recovery_registry import CheckpointRegistry
         registry=CheckpointRegistry(args.registry_dir,args.data_dir)
@@ -65,33 +296,143 @@ def main():
         print(json.dumps(result,ensure_ascii=False,indent=2))
         return
     local=getattr(args,'local',False)
-    s=Service(args.data_dir,enable_semantic=not local)
+    local_commands = ('pending', *procedural_commands, 'capture-session', 'context', 'context-ack', 'confirm-use',
+                      'summary', 'history', 'grants', 'grant-reissue', 'audit',
+                      'compact-core', 'compact-manifest', 'profile-summary',
+                      'profile-summary-select', 'profile-summary-clear', *_LIFECYCLE_COMMANDS)
+    s=Service(args.data_dir,enable_semantic=not local and args.command not in local_commands)
     if args.command=='init':result=s.initialize()
     elif args.command=='serve':return serve(s,args.host,args.port,args.archive_interval)
-    elif args.command=='archive':result=s.archive_cycle()
+    elif args.command=='archive':result=s.archive_cycle(dry_run=args.dry_run)
     elif args.command=='grant':
         if Path(args.output).exists():raise Fault('E_OUTPUT_EXISTS',409)
         r=s.issue_grant(args.spaces,args.purpose,args.runtime,args.role,args.days)
         try:save_private(Path(args.output),canonical(r))
         except Exception:s.revoke_grant(r['grant_id']);raise
         result={'grant_id':r['grant_id'],'credential_file':args.output,'expires_at':r['expires_at']}
+    elif args.command == 'grant-reissue':
+        output = Path(args.output)
+        require(not os.path.lexists(output), 'E_OUTPUT_EXISTS', 409)
+        try:
+            with TemporaryDirectory(prefix='.aiap-grant-', dir=output.parent) as staging:
+                credential = s.reissue_grant(args.grant_id, days=args.days)
+                temp = Path(staging) / 'credential.json'
+                try:
+                    save_private(temp, canonical(credential))
+                    os.link(temp, output)
+                except Exception:
+                    s.revoke_grant(credential['grant_id'])
+                    raise
+        except FileExistsError:
+            raise Fault('E_OUTPUT_EXISTS', 409) from None
+        except OSError:
+            raise Fault('E_CREDENTIAL_OUTPUT') from None
+        result = {'grant_id': credential['grant_id'], 'previous_grant_id': args.grant_id,
+                  'credential_file': args.output, 'expires_at': credential['expires_at']}
     elif args.command=='revoke':s.revoke_grant(args.grant_id);result={'revoked':True}
-    elif local:
-        credential=json.loads(Path(args.credential_file).read_text(encoding='utf-8'))
-        if args.command=='review':
-            result=s.review(credential['token'],args.delta_id)
+    elif args.command=='grant-status':result=s.grant_status(_read_grant_token(args.credential_file))
+    elif args.command == 'grants':
+        result = s.list_grants(role=args.role, after=args.after, limit=args.limit)
+    elif args.command == 'pending':
+        result = s.pending_proposals(_read_grant_token(args.credential_file), space=args.space,
+                                     after=args.after, limit=args.limit)
+    elif args.command in procedural_commands:
+        from .procedural import list_descriptors, read_descriptor, resolve_capability, resolve_workflow, save_descriptor
+        token = _read_grant_token(args.credential_file)
+        if args.descriptor_command == 'put':
+            result = save_descriptor(s, args.command, token, args.space, args.file, args.base_revision)
+        elif args.descriptor_command == 'get':
+            result = read_descriptor(s, args.command, token, args.space, args.descriptor_id)
+        elif args.descriptor_command == 'resolve':
+            resolve = resolve_capability if args.command == 'capability' else resolve_workflow
+            result = resolve(s, token, args.space, args.descriptor_id, args.runtime_id,
+                             runtime_version=args.runtime_version, agent_inventory=args.agent_inventory)
         else:
-            result=s.decide(credential['token'],args.delta_id,args.approve)
-    elif args.command=='delete-preview':
-        credential = json.loads(Path(args.credential_file).read_text(encoding='utf-8'))
-        result = Client(args.base_url, credential['token']).call('/v1/memories/delete/preview', {
-            'memory_id': args.memory_id, 'space_ref': args.space, 'base_revision': args.base_revision,
-        })
+            result = list_descriptors(s, args.command, token, args.space, after=args.after, limit=args.limit)
+    elif args.command == 'capture-session':
+        token = _read_grant_token(args.credential_file)
+        session = s.session(token)
+        require(args.space in session['space_refs'] and 'write' in session['actions'], 'E_DENIED', 403)
+        namespace = None
+        if args.capture_id is not None:
+            require(re.fullmatch(r'[A-Za-z0-9._:-]{1,128}', args.capture_id), 'E_CAPTURE_ID')
+            capture_key = ['aiap-local-session-capture-v1', session['avatar_id'], session['auth_evidence_ref'],
+                           args.space, args.capture_id]
+            namespace = uuid.uuid5(uuid.NAMESPACE_URL, canonical(capture_key).decode('utf-8'))
+        excerpt = _read_session_excerpt()
+        if args.preview:
+            result = {'status': 'preview', 'space_ref': args.space, 'level': 'M1',
+                      'source_type': 'observed', 'characters': len(excerpt)}
+        else:
+            draft = proposal(session, args.space, excerpt, level='M1', source_type='observed', id_namespace=namespace)
+            result = s.propose(token, draft)
+    elif args.command == 'context':
+        token = _read_grant_token(args.credential_file)
+        request = _search_request(args, s.session(token))
+        result = s.search(token, {**request, 'limit': args.limit}, context=True)
+    elif args.command == 'context-ack':
+        result = s.acknowledge(_read_grant_token(args.credential_file), {'view_id': args.view_id})
+    elif args.command == 'confirm-use':
+        result = s.confirm_memory_use(_read_grant_token(args.credential_file), args.space, args.memory_id,
+                                      args.base_revision)
+    elif args.command in _LIFECYCLE_COMMANDS:
+        kind, _ = _LIFECYCLE_COMMANDS[args.command]
+        result = s.propose_lifecycle(_read_grant_token(args.credential_file), args.space, args.memory_id,
+                                     args.base_revision, kind=kind, reason=args.reason)
+    elif args.command == 'summary':
+        result = s.local_summary(_read_grant_token(args.credential_file), space=args.space)
+    elif args.command == 'compact-core':
+        result = s.compact_core(_read_grant_token(args.credential_file), summary_ids=args.summary_memory)
+    elif args.command == 'compact-manifest':
+        result = s.compact_core(_read_grant_token(args.credential_file), space=args.space, revision=args.core_revision)
+    elif args.command == 'profile-summary':
+        result = s.read_profile_summary(_read_grant_token(args.credential_file), args.space, args.memory_id, args.revision)
+    elif args.command in ('profile-summary-select', 'profile-summary-clear'):
+        result = s.set_summary_selection(_read_grant_token(args.credential_file), args.space,
+                                         memory_id=getattr(args, 'memory_id', None),
+                                         revision=getattr(args, 'revision', None))
+    elif args.command == 'history':
+        result = s.memory_history(_read_grant_token(args.credential_file), args.space, args.memory_id,
+                                  revision=args.revision, before=args.before, limit=args.limit)
+    elif args.command == 'audit':
+        result = s.list_audit(_read_grant_token(args.credential_file), space=args.space,
+                              event=args.event, object_id=args.object_id, before=args.before, limit=args.limit)
+    elif args.command in ('delete-preview', 'delete'):
+        target = {'memory_id': args.memory_id, 'space_ref': args.space, 'base_revision': args.base_revision}
+        if args.command == 'delete':
+            result = s.delete(_read_grant_token(args.credential_file), target)
+        elif local:
+            result = s.preview_delete(_read_grant_token(args.credential_file), target)
+        else:
+            credential = json.loads(Path(args.credential_file).read_text(encoding='utf-8'))
+            result = Client(args.base_url, credential['token']).call('/v1/memories/delete/preview', target)
+    elif local:
+        token=_read_grant_token(args.credential_file)
+        session = s.session(token)
+        if args.command == 'search':
+            result = s.search(token, _search_request(args, session))
+        elif args.command == 'propose':
+            require(args.space in session['space_refs'], 'E_DENIED', 403)
+            text = args.text
+            if args.from_revision is not None:
+                history = s.memory_history(token, args.space, args.memory_id, revision=args.from_revision)
+                require(history['current_revision'] == args.base_revision, 'E_VERSION_CONFLICT', 409)
+                text = history['record']['content']
+            old = None
+            if args.memory_id is not None:
+                old = s.memory_for_update(token, args.space, args.memory_id, args.base_revision)
+            draft = proposal(session, args.space, text, old=old,
+                             pinned=True if args.pinned else None, level=args.level)
+            result = s.propose(token, draft)
+        else:
+            require(session['role']=='owner','E_DENIED',403)
+            if args.command=='review':result=s.review(token,args.delta_id,changes=args.changes)
+            else:result=s.decide(token,args.delta_id,args.approve,allow_lifecycle=True)
     else:
         credential=json.loads(Path(args.credential_file).read_text(encoding='utf-8'));client=Client(args.base_url,credential['token']);session=client.call('/v1/session')
         if args.command=='session':result=session
         elif args.command=='core':result=client.call('/v1/core')
-        elif args.command=='search':result=client.call('/v1/search',{'space_refs':[args.space],'purpose':session['purpose'],'query':args.query,'include_archived':args.include_archived})
+        elif args.command=='search':result=client.call('/v1/search',_search_request(args,session))
         elif args.command=='propose':result=client.call('/v1/deltas/propose',proposal(session,args.space,args.text,pinned=args.pinned))
         elif args.command=='review':result=client.call('/v1/deltas/review',{'delta_id':args.delta_id})
         elif args.command=='decide':result=client.call('/v1/deltas/decide',{'delta_id':args.delta_id,'approve':args.approve})

@@ -4,10 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aiap-core-service"
-version = "0.2.0"
+version = "0.2.1"
 description = "Local AIAP Core service and storage"
 requires-python = ">=3.10"
 dependencies = ["jsonschema==4.26.0", "rfc3339-validator==0.1.4", "cryptography>=46.0.5"]
+
+[project.optional-dependencies]
+system-embedding = ["pyobjc-framework-NaturalLanguage>=10; sys_platform == 'darwin'"]
 
 [tool.setuptools]
 packages = ["aiap_core", "aiap_core.profile"]

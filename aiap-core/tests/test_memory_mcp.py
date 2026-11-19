@@ -63,7 +63,8 @@ class MemoryAdmissionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((candidate['level'], candidate['type']), (level, kind))
             self.assertEqual(candidate['source']['source_type'], 'inferred')
             self.assertEqual(candidate['confidence'], 0.5)
-            self.assertEqual((await self.call('aiap_memory_search', query=arguments['text']))['results'], [])
+            before = (await self.call('aiap_memory_search', query=arguments['text']))['results']
+            self.assertNotIn(candidate['memory_id'], [item['id'] for item in before])
             with self.assertRaises(Fault):
                 self.core.decide(self.adapter, delta, True)
             self.core.decide(self.owner, delta, True)

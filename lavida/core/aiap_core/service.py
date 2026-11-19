@@ -2,12 +2,16 @@
 Wang Lu. Request authorization is resolved inside each SQLite transaction.
 """
 import sqlite3,json,secrets,hashlib,os,uuid,copy
+import re
+import stat
 from pathlib import Path
 from contextlib import contextmanager
 from datetime import datetime,timezone,timedelta
+from tempfile import TemporaryDirectory
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,Ed25519PublicKey
 from cryptography.hazmat.primitives import serialization
-from .contracts import Fault,require,validate,canonical,digest,b64,unb64,exact,names
+from . import lexical
+from .contracts import Fault,require,validate,canonical,digest,b64,unb64,exact,names,search_levels
 
 def uid(prefix):return prefix+str(uuid.uuid4())
 def stamp(dt):return dt.astimezone(timezone.utc).isoformat(timespec='microseconds').replace('+00:00','Z')
@@ -30,6 +34,26 @@ CREATE TABLE IF NOT EXISTS tombstones(avatar TEXT NOT NULL,id TEXT NOT NULL,spac
 CREATE TABLE IF NOT EXISTS views(id TEXT PRIMARY KEY,avatar TEXT NOT NULL,grant_id TEXT NOT NULL,scopes TEXT NOT NULL,body TEXT NOT NULL,acked INTEGER NOT NULL DEFAULT 0,invalidated INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS audit(id TEXT PRIMARY KEY,avatar TEXT NOT NULL,space TEXT,event TEXT NOT NULL,object_id TEXT,at TEXT NOT NULL,actor TEXT NOT NULL);
 '''
+
+# The Owner must cover every participating space, even when filtering to one.
+_PROPOSAL_SCOPES_VISIBLE = '''NOT EXISTS (
+    SELECT 1 FROM json_each(delta.scopes) AS scope
+    WHERE NOT EXISTS (
+        SELECT 1 FROM json_each(:allowed) AS allowed WHERE allowed.value = scope.value
+    )
+)'''
+_COMPACT_CORE_PROFILE = 'x-aiap-local-compact-core-v1'
+_SPACE_MANIFEST_PROFILE = 'x-aiap-local-space-manifest-v1'
+_SUMMARY_SELECTION_FILE = 'profile-summary-selections.json'
+_SUMMARY_SELECTION_LIMIT = 16384
+LOCAL_LIFECYCLE_EXTENSION = 'x-aiap-local-memory-lifecycle'
+LOCAL_LIFECYCLE_DOMAIN = 'aiap.memory.lifecycle'
+LOCAL_LIFECYCLE_TRANSITIONS = {
+    'promote': (('M1',), 'M2', 'memory-promoted'),
+    'reactivate': (('M3',), 'M1', 'memory-reactivated'),
+    'archive': (('M1', 'M2'), 'M3', 'memory-archived'),
+}
+
 class Service:
     def __init__(self,data_dir,clock=None,*,enable_semantic=True):
         from .semantic import Semantic
@@ -89,9 +113,22 @@ class Service:
             m=json.loads(r['body']);refs.append({'id':m['memory_id'],'version':m['revision'],'scope':m['scope'],'sha256':digest(m)})
         n=row['revision']+1
         core={'aiap_version':'0.4.2','profile_version':'0.1-draft','avatar_id':av,'owner':{'owner_ref':row['owner'],'owner_key_ref':'local-key:owner','avatar_key_ref':'local-key:avatar'},'revision':n,'previous_revision':n-1 if n>1 else None,'identity_refs':['local-identity:enrollment'],'profile_summary':[],'state_index':refs,'procedural_index':[],'extensions':[{'namespace':'x-aiap-core-profile','version':'0.1-draft','critical':True}],'updated_at':stamp(self.now())}
-        payload=canonical(core);key=serialization.load_pem_private_key((self.directory/'avatar-key.pem').read_bytes(),None)
-        core['integrity']={'manifest_sha256':hashlib.sha256(payload).hexdigest(),'proofs':[{'crypto_profile':'x-aiap-local-ed25519-json-v1','key_ref':'local-key:avatar','signature':b64(key.sign(b'AIAP-LOCAL-CORE-v1\x00'+payload))}]}
+        self._sign_core(core, 'x-aiap-local-ed25519-json-v1', b'AIAP-LOCAL-CORE-v1\x00')
         validate('avatar-core',core);c.execute('UPDATE cores SET revision=?,body=? WHERE avatar=?',(n,encode(core),av))
+
+    def _sign_core(self, core, profile, domain, *, expected_public_key=None):
+        payload = canonical(core)
+        key = serialization.load_pem_private_key((self.directory / 'avatar-key.pem').read_bytes(), None)
+        if expected_public_key is not None:
+            require(isinstance(key, Ed25519PrivateKey)
+                    and b64(key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw))
+                    == expected_public_key, 'E_INTEGRITY', 500)
+        core['integrity'] = {
+            'manifest_sha256': hashlib.sha256(payload).hexdigest(),
+            'proofs': [{'crypto_profile': profile, 'key_ref': 'local-key:avatar',
+                        'signature': b64(key.sign(domain + payload))}],
+        }
+
     @staticmethod
     def verify_local_core(core,enrollment):
         try:
@@ -107,20 +144,105 @@ class Service:
         # Local operator command only; never exposed over HTTP.
         require(names(scopes) and isinstance(purpose,str) and 0<len(purpose)<=200 and isinstance(runtime,str) and 0<len(runtime)<=200)
         require(role in ('owner','adapter') and isinstance(days,int) and 1<=days<=30)
-        raw=secrets.token_urlsafe(32);ident=uid('grant:');now=self.now()
-        with self.tx() as c:
-            av=self.meta(c,'avatar');owner=self.meta(c,'owner')
-            known={r[0] for r in c.execute('SELECT id FROM spaces WHERE avatar=?',(av,))}
-            require(set(scopes)<=known,'E_SCOPE',403)
-            actions=['read','write','delete','admin'] if role=='owner' else ['read','write']
-            c.execute('INSERT INTO grants VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0)',(ident,hashlib.sha256(raw.encode()).hexdigest(),av,owner,role,encode(scopes),encode(actions),purpose,runtime,uid('session:'),stamp(now),stamp(now+timedelta(days=days))))
-            self._audit(c,av,None,'credential-issued',ident,'local-operator')
-        return {'token':raw,'grant_id':ident,'avatar_id':av,'role':role,'space_refs':scopes,'purpose':purpose,'runtime_ref':runtime,'expires_at':stamp(now+timedelta(days=days))}
+        actions = ['read', 'write', 'delete', 'admin'] if role == 'owner' else ['read', 'write']
+        with self.tx() as connection:
+            avatar = self.meta(connection, 'avatar')
+            subject = self.meta(connection, 'owner')
+            return self._insert_grant(connection, avatar, subject, role, scopes, actions,
+                                      purpose, runtime, self.now(), days)
+
+    def reissue_grant(self, grant_id, *, days=7):
+        require(isinstance(grant_id, str) and 0 < len(grant_id) <= 200)
+        require(type(days) is int and 1 <= days <= 30)
+        with self.tx() as connection:
+            avatar = self.meta(connection, 'avatar')
+            grant = connection.execute('SELECT * FROM grants WHERE avatar=? AND id=?',
+                                       (avatar, grant_id)).fetchone()
+            require(grant is not None, 'E_NOT_FOUND', 404)
+            now = self.now()
+            require(not grant['revoked'] and parse(grant['issued']) <= now, 'E_GRANT_NOT_REISSUABLE', 409)
+            return self._insert_grant(connection, avatar, grant['subject'], grant['role'],
+                                      json.loads(grant['scopes']), json.loads(grant['actions']),
+                                      grant['purpose'], grant['runtime'], now, days)
+
+    def _insert_grant(self, connection, avatar, subject, role, scopes, actions, purpose, runtime, now, days):
+        known = {row['id'] for row in connection.execute('SELECT id FROM spaces WHERE avatar=?', (avatar,))}
+        require(set(scopes) <= known, 'E_SCOPE', 403)
+        token = secrets.token_urlsafe(32)
+        grant_id = uid('grant:')
+        expires = stamp(now + timedelta(days=days))
+        connection.execute('INSERT INTO grants VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0)',
+                           (grant_id, hashlib.sha256(token.encode()).hexdigest(), avatar, subject,
+                            role, encode(scopes), encode(actions), purpose, runtime, uid('session:'),
+                            stamp(now), expires))
+        self._audit(connection, avatar, None, 'credential-issued', grant_id, 'local-operator')
+        return {'token': token, 'grant_id': grant_id, 'avatar_id': avatar, 'role': role,
+                'space_refs': scopes, 'purpose': purpose, 'runtime_ref': runtime, 'expires_at': expires}
+
     def revoke_grant(self,ident):
         with self.tx() as c:
-            r=c.execute('SELECT avatar FROM grants WHERE id=?',(ident,)).fetchone();require(r is not None,'E_NOT_FOUND',404)
-            c.execute('UPDATE grants SET revoked=1 WHERE id=?',(ident,));epoch=self.meta(c,'revocation_epoch')+1;c.execute('UPDATE meta SET value=? WHERE key=?',(encode(epoch),'revocation_epoch'))
-            self._audit(c,r['avatar'],None,'credential-revoked',ident,'local-operator')
+            grant = c.execute('SELECT avatar, revoked FROM grants WHERE id=?', (ident,)).fetchone()
+            require(grant is not None, 'E_NOT_FOUND', 404)
+            if grant['revoked']:
+                return
+            c.execute('UPDATE grants SET revoked=1 WHERE id=?', (ident,))
+            epoch = self.meta(c, 'revocation_epoch') + 1
+            c.execute('UPDATE meta SET value=? WHERE key=?', (encode(epoch), 'revocation_epoch'))
+            self._audit(c, grant['avatar'], None, 'credential-revoked', ident, 'local-operator')
+    def grant_status(self, token):
+        require(isinstance(token, str) and 20 <= len(token) <= 200, 'E_IDENTITY', 401)
+        try:
+            token_hash = hashlib.sha256(token.encode()).hexdigest()
+        except UnicodeEncodeError:
+            raise Fault('E_IDENTITY', 401) from None
+        with self.tx(read_only=True) as c:
+            grant = c.execute(
+                'SELECT id, role, scopes, issued, expires, revoked FROM grants WHERE token_hash=?',
+                (token_hash,),
+            ).fetchone()
+            now = self.now()
+        if grant is None:
+            return {'status': 'unknown'}
+        return self._grant_summary(grant, now)
+
+    @staticmethod
+    def _grant_summary(grant, now):
+        if grant['revoked']:
+            status = 'revoked'
+        elif now < parse(grant['issued']):
+            status = 'not-yet-valid'
+        elif now >= parse(grant['expires']):
+            status = 'expired'
+        else:
+            status = 'active'
+        return {
+            'status': status,
+            'grant_id': grant['id'],
+            'role': grant['role'],
+            'space_refs': json.loads(grant['scopes']),
+            'issued_at': grant['issued'],
+            'expires_at': grant['expires'],
+        }
+
+    def list_grants(self, *, role=None, after=None, limit=20):
+        # Local operator command only, like grant issuance and revocation.
+        require(role in (None, 'owner', 'adapter'))
+        require(after is None or (isinstance(after, str) and 0 < len(after) <= 200))
+        require(type(limit) is int and 1 <= limit <= 100)
+        with self.tx(read_only=True) as connection:
+            avatar = self.meta(connection, 'avatar')
+            now = self.now()
+            rows = connection.execute('''
+                SELECT id, role, scopes, purpose, runtime, issued, expires, revoked
+                FROM grants
+                WHERE avatar = :avatar AND id > :after
+                  AND (:role IS NULL OR role = :role)
+                ORDER BY id LIMIT :page_size
+            ''', {'avatar': avatar, 'after': after or '', 'role': role, 'page_size': limit + 1}).fetchall()
+        grants = [{**self._grant_summary(row, now), 'purpose': row['purpose'], 'runtime_ref': row['runtime']}
+                  for row in rows[:limit]]
+        return {'grants': grants, 'next_after': grants[-1]['grant_id'] if len(rows) > limit else None}
+
     def _grant(self,c,token=None,ident=None):
         if token is not None:
             require(isinstance(token,str) and 20<=len(token)<=200,'E_IDENTITY',401)
@@ -138,41 +260,210 @@ class Service:
         r=c.execute('SELECT * FROM spaces WHERE avatar=? AND id=?',(g['avatar'],sid)).fetchone();require(r is not None,'E_DENIED',403)
         return {'owner_ref':g['subject'],'space_ref':sid,'policy_ref':{'id':r['policy'],'version':r['revision']}}
     def session(self,token):
-        with self.tx() as c:
+        with self.tx(read_only=True) as c:
             g=self._grant(c,token);scopes=json.loads(g['scopes'])
-            return {'avatar_id':g['avatar'],'subject_ref':g['subject'],'role':g['role'],'runtime_ref':g['runtime'],'session_ref':g['session'],'auth_evidence_ref':g['id'],'purpose':g['purpose'],'space_refs':scopes,'scopes':[self._scope(c,g,s) for s in scopes],'issued_at':g['issued'],'expires_at':g['expires'],'actions':json.loads(g['actions']),'retrieval':('scoped-hybrid-cosine' if self.semantic and set(scopes)<=self.semantic.scopes else 'scoped-literal-substring')}
+            result = {'avatar_id':g['avatar'],'subject_ref':g['subject'],'role':g['role'],'runtime_ref':g['runtime'],'session_ref':g['session'],'auth_evidence_ref':g['id'],'purpose':g['purpose'],'space_refs':scopes,'scopes':[self._scope(c,g,s) for s in scopes],'issued_at':g['issued'],'expires_at':g['expires'],'actions':json.loads(g['actions']),'retrieval':('scoped-hybrid-cosine' if self.semantic and set(scopes)<=self.semantic.scopes else lexical.METHOD)}
+            if self.semantic and set(scopes) <= self.semantic.scopes:
+                if setup := getattr(self.semantic, 'setup', None):
+                    result['embedding_setup'] = setup()
+            return result
     def core(self,token):
         with self.tx() as c:
-            g=self._grant(c,token);allspaces=[r[0] for r in c.execute('SELECT id FROM spaces WHERE avatar=?',(g['avatar'],))]
-            self._allow(g,allspaces,'read',owner=True)
-            core=json.loads(c.execute('SELECT body FROM cores WHERE avatar=?',(g['avatar'],)).fetchone()[0]);en=self.meta(c,'enrollment')
-            require(self.verify_local_core(core,en),'E_INTEGRITY',500)
-            return {'avatar_core':core,'local_enrollment':en,'trust_model':'local-bootstrap; not remote-owner-verification'}
+            _, _, core, enrollment = self._owner_core(c, token)
+            return {'avatar_core':core,'local_enrollment':enrollment,'trust_model':'local-bootstrap; not remote-owner-verification'}
+
+    def _owner_core(self, connection, token):
+        owner = self._grant(connection, token)
+        avatar = owner['avatar']
+        spaces = [row['id'] for row in connection.execute('SELECT id FROM spaces WHERE avatar=? ORDER BY id', (avatar,))]
+        self._allow(owner, spaces, 'read', owner=True)
+        core, enrollment = self._load_signed_core(connection, avatar)
+        return owner, spaces, core, enrollment
+
+    def _load_signed_core(self, connection, avatar):
+        row = connection.execute('SELECT revision, body FROM cores WHERE avatar=?', (avatar,)).fetchone()
+        require(row is not None, 'E_INTEGRITY', 500)
+        core = json.loads(row['body'])
+        enrollment = self.meta(connection, 'enrollment')
+        require(core['avatar_id'] == avatar and core['revision'] == row['revision']
+                and self.verify_local_core(core, enrollment), 'E_INTEGRITY', 500)
+        return core, enrollment
+
+    def _summary_source(self, connection, owner, ref):
+        space = ref['scope']['space_ref']
+        self._allow(owner, [space], 'read', owner=True)
+        row = connection.execute(
+            'SELECT revision, body FROM memories WHERE avatar=? AND space=? AND id=?',
+            (owner['avatar'], space, ref['id']),
+        ).fetchone()
+        require(row is not None and row['revision'] == ref['version'], 'E_VERSION_CONFLICT', 409)
+        memory = json.loads(row['body'])
+        require(memory['scope'] == ref['scope'] == self._scope(connection, owner, space)
+                and digest(memory) == ref['sha256'], 'E_INTEGRITY', 500)
+        require(memory['status'] == 'active' and memory['level'] == 'M2' and memory['retention']['pinned']
+                and isinstance(memory['content'], str) and len(memory['content']) <= 1024,
+                'E_SUMMARY_SOURCE', 409)
+        return memory['content']
+
+    def read_profile_summary(self, token, space, memory_id=None, revision=None):
+        use_saved = memory_id is None and revision is None
+        require(use_saved or (isinstance(memory_id, str) and 0 < len(memory_id) <= 200
+                              and type(revision) is int and revision > 0))
+        with self.tx(read_only=True) as connection:
+            owner = self._grant(connection, token)
+            self._allow(owner, [space], 'read', owner=True)
+            selection = None
+            if use_saved:
+                selection = self._load_summary_selections(owner['avatar']).get(space)
+                require(selection is not None, 'E_NOT_FOUND', 404)
+                memory_id, revision = selection['id'], selection['version']
+            ref = self._current_summary_ref(connection, owner, space, memory_id, revision)
+            if selection is not None:
+                require(ref['sha256'] == selection['sha256'], 'E_VERSION_CONFLICT', 409)
+            return {'reference': ref, 'text': self._summary_source(connection, owner, ref)}
+
+    def _current_summary_ref(self, connection, owner, space, memory_id, revision):
+        core, _ = self._load_signed_core(connection, owner['avatar'])
+        ref = next((ref for ref in core['state_index']
+                    if ref['id'] == memory_id and ref['scope']['space_ref'] == space), None)
+        require(ref is not None, 'E_NOT_FOUND', 404)
+        require(ref['version'] == revision, 'E_VERSION_CONFLICT', 409)
+        return ref
+
+    def _load_summary_selections(self, avatar):
+        path = self.directory / _SUMMARY_SELECTION_FILE
+        try:
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except FileNotFoundError:
+            return {}
+        except OSError:
+            raise Fault('E_SUMMARY_SELECTION_FILE') from None
+        try:
+            with os.fdopen(descriptor, 'rb') as stream:
+                info = os.fstat(stream.fileno())
+                require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() and not info.st_mode & 0o077,
+                        'E_SUMMARY_SELECTION_FILE')
+                raw = stream.read(_SUMMARY_SELECTION_LIMIT + 1)
+            require(len(raw) <= _SUMMARY_SELECTION_LIMIT, 'E_SUMMARY_SELECTION_FILE')
+            data = json.loads(raw)
+            exact(data, ['avatar_id', 'spaces'])
+            require(data['avatar_id'] == avatar and isinstance(data['spaces'], dict)
+                    and len(data['spaces']) <= 16, 'E_SUMMARY_SELECTION_FILE')
+            for space, selection in data['spaces'].items():
+                exact(selection, ['id', 'version', 'sha256'])
+                require(0 < len(space) <= 200 and isinstance(selection['id'], str)
+                        and 0 < len(selection['id']) <= 200 and type(selection['version']) is int
+                        and selection['version'] > 0 and isinstance(selection['sha256'], str)
+                        and re.fullmatch('[0-9a-f]{64}', selection['sha256']), 'E_SUMMARY_SELECTION_FILE')
+            return data['spaces']
+        except (OSError, ValueError, RecursionError):
+            raise Fault('E_SUMMARY_SELECTION_FILE') from None
+
+    def set_summary_selection(self, token, space, *, memory_id=None, revision=None):
+        clearing = memory_id is None and revision is None
+        require(clearing or (isinstance(memory_id, str) and 0 < len(memory_id) <= 200
+                             and type(revision) is int and revision > 0))
+        with self.tx() as connection:
+            owner = self._grant(connection, token)
+            self._allow(owner, [space], 'write', owner=True)
+            self._scope(connection, owner, space)
+            selections = self._load_summary_selections(owner['avatar'])
+            if clearing:
+                if selections.pop(space, None) is None:
+                    return {'space_ref': space, 'selection': None}
+            else:
+                ref = self._current_summary_ref(connection, owner, space, memory_id, revision)
+                self._summary_source(connection, owner, ref)
+                selections[space] = {key: ref[key] for key in ('id', 'version', 'sha256')}
+            data = canonical({'avatar_id': owner['avatar'], 'spaces': selections})
+            require(len(selections) <= 16 and len(data) <= _SUMMARY_SELECTION_LIMIT, 'E_SUMMARY_SELECTION_FILE')
+            try:
+                with TemporaryDirectory(prefix='.aiap-summary-', dir=self.directory) as staging:
+                    temporary = Path(staging) / _SUMMARY_SELECTION_FILE
+                    save_private(temporary, data)
+                    with temporary.open('rb') as written:
+                        os.fsync(written.fileno())
+                    temporary.replace(self.directory / _SUMMARY_SELECTION_FILE)
+            except OSError:
+                raise Fault('E_SUMMARY_SELECTION_FILE') from None
+            return {'space_ref': space, 'selection': selections.get(space)}
+
+    def compact_core(self, token, *, space=None, revision=None, summary_ids=()):
+        require((space is None and revision is None)
+                or (isinstance(space, str) and type(revision) is int and revision > 0 and not summary_ids))
+        with self.tx(read_only=True) as connection:
+            owner, spaces, core, enrollment = self._owner_core(connection, token)
+            require(len(summary_ids) <= len(spaces) and all(isinstance(ident, str) and 0 < len(ident) <= 200
+                                                          for ident in summary_ids))
+            selected = set(summary_ids)
+            require(len(selected) == len(summary_ids))
+            require(core['extensions'] == [{'namespace': 'x-aiap-core-profile', 'version': '0.1-draft', 'critical': True}],
+                    'E_CRITICAL_EXTENSION')
+            require(core['profile_summary'] == [] and core['procedural_index'] == [], 'E_OPERATION_UNSUPPORTED')
+            if space is not None:
+                require(space in spaces, 'E_SCOPE', 403)
+                require(revision == core['revision'], 'E_VERSION_CONFLICT', 409)
+            saved = self._load_summary_selections(owner['avatar']) if space is None and not selected else {}
+            manifests = {sid: {'profile': _SPACE_MANIFEST_PROFILE, 'avatar_id': core['avatar_id'],
+                               'core_revision': core['revision'], 'scope': self._scope(connection, owner, sid),
+                               'entries': []} for sid in spaces}
+            summaries = {}
+            for ref in core['state_index']:
+                manifest = manifests.get(ref['scope']['space_ref'])
+                require(manifest is not None and ref['scope'] == manifest['scope'], 'E_SCOPE', 409)
+                manifest['entries'].append(ref)
+                sid = ref['scope']['space_ref']
+                selection = saved.get(sid)
+                if ref['id'] in selected or (selection is not None and all(ref[key] == value for key, value in selection.items())):
+                    require(sid not in summaries, 'E_SUMMARY_SOURCE', 409)
+                    self._summary_source(connection, owner, ref)
+                    summaries[sid] = ref
+            if selected:
+                require(len(summaries) == len(selected), 'E_NOT_FOUND', 404)
+            if space is not None:
+                manifest = manifests[space]
+                return {'manifest': manifest, 'sha256': digest(manifest)}
+
+            core.pop('integrity')
+            core['profile_summary'] = [summaries[sid] for sid in spaces if sid in summaries]
+            core['state_index'] = [
+                {'id': f'manifest:{sid}', 'version': core['revision'],
+                 'scope': manifest['scope'], 'sha256': digest(manifest)}
+                for sid, manifest in manifests.items()
+            ]
+            core['extensions'].append({'namespace': _COMPACT_CORE_PROFILE, 'version': '1', 'critical': True})
+            self._sign_core(core, _COMPACT_CORE_PROFILE, b'AIAP-LOCAL-COMPACT-CORE-v1\x00',
+                            expected_public_key=enrollment['payload']['avatar_public_key'])
+            validate('avatar-core', core)
+            result = {'avatar_core': core, 'local_enrollment': enrollment}
+            stale = set(saved) - set(summaries)
+            if stale:
+                result['stale_summary_spaces'] = sorted(stale)
+            return result
+
     def search(self,token,body,context=False):
         if self.semantic is not None and not context:
             from .semantic import semantic_search
             return semantic_search(self,token,body)
         return self._literal_search(token,body,context)
     def _literal_search(self,token,body,context=False):
-        exact(body,['space_refs','purpose','query'],['include_archived','limit'])
-        require(isinstance(body['query'],str) and len(body['query'])<=1000)
-        limit=body.get('limit',20);require(type(limit) is int and 1<=limit<=100)
-        include=body.get('include_archived',False);require(type(include) is bool)
+        levels = search_levels(body)
+        limit = body.get('limit', 20)
         with self.tx() as c:
             g=self._grant(c,token);scopes=body['space_refs'];self._allow(g,scopes,'read',body['purpose'])
             placeholders=','.join('?' for _ in scopes)
             # SQL scope predicate runs before any body reaches application scoring/context.
             rows=c.execute(f'SELECT body FROM memories WHERE avatar=? AND space IN ({placeholders}) ORDER BY id',(g['avatar'],*scopes))
             result=[]
-            q=body['query'].casefold()
             for row in rows:
                 m=json.loads(row[0])
-                if m['status']!='active' or (m['level']=='M3' and not include):continue
+                if m['status']!='active' or m['level'] not in levels:continue
                 if m['scope']!=self._scope(c,g,m['scope']['space_ref']):continue
-                if q and q not in m['content'].casefold():continue
                 result.append(m)
-                if len(result)>=limit:break
-            out={'items':result,'count':len(result),'retrieval':'scoped-literal-substring','space_refs':scopes}
+                if not body['query'] and len(result) > limit:
+                    break
+            result, more, method = lexical.rank(result, body['query'], limit)
+            out={'items':result,'count':len(result),'retrieval':method,'space_refs':scopes,'possibly_more':more}
             if context:
                 refs=[{'id':m['memory_id'],'version':m['revision'],'scope':m['scope'],'sha256':digest(m)} for m in result]
                 view={'view_id':uid('view:'),'request_ref':uid('request:'),'avatar_id':g['avatar'],'subject_ref':g['subject'],'session_ref':g['session'],'runtime_ref':g['runtime'],'purpose':g['purpose'],'space_refs':scopes,'objects':refs,'policy_versions':[self._scope(c,g,s)['policy_ref'] for s in scopes],'revocation_epoch':self.meta(c,'revocation_epoch'),'compiled_at':stamp(self.now()),'expires_at':stamp(min(parse(g['expires']),self.now()+timedelta(minutes=5)))}
@@ -191,17 +482,60 @@ class Service:
             for obj in v['objects']:
                 row=c.execute('SELECT * FROM memories WHERE avatar=? AND id=?',(g['avatar'],obj['id'])).fetchone()
                 require(row is not None and row['revision']==obj['version'],'E_VERSION_CONFLICT',409)
-                m=json.loads(row['body']);c.execute('INSERT OR IGNORE INTO history VALUES(?,?,?,?,?)',(g['avatar'],m['memory_id'],m['revision'],row['space'],row['body']));require(m['scope']==self._scope(c,g,m['scope']['space_ref']),'E_POLICY_VERSION',409)
-                m['lifecycle']['last_used_at']=stamp(self.now());m['lifecycle']['context_use_count']+=1
-                m['previous_revision']=m['revision'];m['revision']+=1;m['updated_at']=stamp(self.now())
-                validate('memory-record',m);c.execute('UPDATE memories SET revision=?,body=? WHERE avatar=? AND id=?',(m['revision'],encode(m),g['avatar'],m['memory_id']));touched=True
+                memory = json.loads(row['body'])
+                require(memory['scope'] == self._scope(c, g, memory['scope']['space_ref']), 'E_POLICY_VERSION', 409)
+                self._record_memory_use(c, row, memory, 'context_use_count')
+                touched = True
             c.execute('UPDATE views SET acked=1 WHERE id=?',(body['view_id'],))
             if touched:self._rebuild_core(c,g['avatar'])
             self._audit(c,g['avatar'],None,'context-use-acknowledged',body['view_id'],g['id'])
             return {'acknowledged':True,'idempotent':False}
-    def _validate_delta(self,c,g,envelope):
+
+    def _record_memory_use(self, connection, row, memory, counter):
+        connection.execute('INSERT OR IGNORE INTO history VALUES(?,?,?,?,?)',
+                           (row['avatar'], row['id'], row['revision'], row['space'], row['body']))
+        now = stamp(self.now())
+        memory['lifecycle']['last_used_at'] = now
+        memory['lifecycle'][counter] += 1
+        memory['previous_revision'] = row['revision']
+        memory['revision'] = row['revision'] + 1
+        memory['updated_at'] = now
+        validate('memory-record', memory)
+        connection.execute('UPDATE memories SET revision=?, body=? WHERE avatar=? AND id=?',
+                           (memory['revision'], encode(memory), row['avatar'], row['id']))
+
+    def confirm_memory_use(self, token, space, memory_id, revision):
+        require(isinstance(memory_id, str) and 0 < len(memory_id) <= 200)
+        require(type(revision) is int and revision > 0)
+        with self.tx() as connection:
+            owner = self._grant(connection, token)
+            self._allow(owner, [space], 'read', owner=True)
+            self._allow(owner, [space], 'write')
+            row = connection.execute('SELECT * FROM memories WHERE avatar=? AND space=? AND id=?',
+                                     (owner['avatar'], space, memory_id)).fetchone()
+            require(row is not None, 'E_NOT_FOUND', 404)
+            require(row['revision'] == revision, 'E_VERSION_CONFLICT', 409)
+            memory = json.loads(row['body'])
+            require(memory['status'] == 'active', 'E_NOT_FOUND', 404)
+            require(memory['scope'] == self._scope(connection, owner, space), 'E_POLICY_VERSION', 409)
+            self._record_memory_use(connection, row, memory, 'confirmed_use_count')
+            self._rebuild_core(connection, owner['avatar'])
+            self._audit(connection, owner['avatar'], space, 'memory-use-confirmed', memory_id, owner['id'])
+            return {'memory_id': memory_id, 'space_ref': space, 'revision': memory['revision'],
+                    'confirmed_use_count': memory['lifecycle']['confirmed_use_count']}
+
+    def _validate_delta(self,c,g,envelope,*,allow_lifecycle=False):
         validate('state-delta',envelope);d=envelope['delta'];q=envelope['request'];bs=envelope['bindings'];scopes=q['space_refs']
         self._allow(g,scopes,'write',q['purpose'])
+        extensions = d.get('extensions', {})
+        lifecycle = extensions.get(LOCAL_LIFECYCLE_EXTENSION)
+        if LOCAL_LIFECYCLE_EXTENSION in extensions:
+            require(allow_lifecycle, 'E_OPERATION_UNSUPPORTED', 422)
+            exact(lifecycle, ['kind', 'reason'])
+            require(isinstance(lifecycle['kind'], str) and lifecycle['kind'] in LOCAL_LIFECYCLE_TRANSITIONS
+                    and isinstance(lifecycle['reason'], str) and lifecycle['reason'].strip()
+                    and len(lifecycle['reason']) <= 500 and len(d['changes']) == 1, 'E_LIFECYCLE_TRANSITION')
+            self._allow(g, scopes, 'write', q['purpose'], owner=True)
         require(q['authenticated_subject_ref']==g['subject'] and q['auth_evidence_ref']==g['id'] and q['avatar_id']==g['avatar'] and q['session_ref']==g['session'] and q['runtime_ref']==g['runtime'],'E_IDENTITY',403)
         require(q['action']=='write' and q['processor_refs']==[],'E_DENIED',403)
         require(d['avatar_id']==g['avatar'] and d['runtime_id']==g['runtime'],'E_SCOPE',403)
@@ -211,8 +545,9 @@ class Service:
         require(len(set(ids))==len(ids) and len(set(bids))==len(bids) and set(ids)==set(bids))
         targets=[x['target_object_id'] for x in bs];require(len(set(targets))==len(targets))
         by={x['change_id']:x for x in bs};records=[]
+        domain = LOCAL_LIFECYCLE_DOMAIN if lifecycle is not None else 'aiap.memory'
         for ch in d['changes']:
-            require(ch['domain']=='aiap.memory' and ch['operation'] in ('add','update'),'E_OPERATION_UNSUPPORTED',422)
+            require(ch['domain']==domain and ch['operation'] in ('add','update'),'E_OPERATION_UNSUPPORTED',422)
             b=by[ch['change_id']];m=ch['candidate'];validate('memory-record',m)
             require(isinstance(m['content'],str) and 0<len(m['content'])<=16000,'E_OPERATION_UNSUPPORTED',422)
             require(m['derived_from']==[] and not m.get('extensions'),'E_OPERATION_UNSUPPORTED',422)
@@ -232,29 +567,252 @@ class Service:
             require(m['source']['source_ref'] in b['source_refs'])
             require(m['lifecycle']['policy_ref']=={'id':'lifecycle:default','version':1},'E_POLICY_VERSION',409)
             require(m['retention'].get('minimum_level') is None and m['retention'].get('inactive_after_days_override') is None,'E_OPERATION_UNSUPPORTED',422)
-            records.append((m,json.loads(old['body']) if old else None))
+            prior = json.loads(old['body']) if old else None
+            if lifecycle is not None:
+                previous_levels, target_level, _ = LOCAL_LIFECYCLE_TRANSITIONS[lifecycle['kind']]
+                require(prior is not None and ch['operation'] == 'update' and prior['status'] == 'active'
+                        and prior['level'] in previous_levels, 'E_LIFECYCLE_TRANSITION', 409)
+                require(m == {**prior, 'level': target_level, 'status': 'candidate'}, 'E_LIFECYCLE_TRANSITION', 409)
+            elif prior is not None:
+                require(m['level'] == prior['level'], 'E_LIFECYCLE_TRANSITION', 409)
+            records.append((m, prior))
         return records
-    def propose(self,token,envelope):
+    def propose(self,token,envelope,*,allow_lifecycle=False):
         validate('state-delta',envelope)
         with self.tx() as c:
             g=self._grant(c,token);d=envelope['delta'];scopes=envelope['request']['space_refs'];self._allow(g,scopes,'write',envelope['request']['purpose'])
+            if LOCAL_LIFECYCLE_EXTENSION in d.get('extensions', {}):
+                require(allow_lifecycle, 'E_OPERATION_UNSUPPORTED', 422)
             prior=c.execute('SELECT * FROM deltas WHERE avatar=? AND id=?',(g['avatar'],d['delta_id'])).fetchone()
             if prior:
                 require(prior['issuer']==g['id'],'E_DENIED',403)
                 require(prior['payload_hash']==digest(envelope),'E_IDEMPOTENCY_CONFLICT',409)
                 return {'delta_id':d['delta_id'],'status':prior['status'],'idempotent':True}
-            self._validate_delta(c,g,envelope)
+            self._validate_delta(c,g,envelope,allow_lifecycle=allow_lifecycle)
             c.execute('INSERT INTO deltas VALUES(?,?,?,?,?,?,?,?)',(g['avatar'],d['delta_id'],g['id'],encode(scopes),digest(envelope),encode(envelope),'proposed',None))
             self._audit(c,g['avatar'],None,'delta-proposed',d['delta_id'],g['id'])
             return {'delta_id':d['delta_id'],'status':'proposed','idempotent':False}
-    def review(self,token,ident):
-        require(isinstance(ident,str))
-        with self.tx() as c:
-            g=self._grant(c,token);r=c.execute('SELECT * FROM deltas WHERE avatar=? AND id=?',(g['avatar'],ident)).fetchone()
-            require(r is not None and set(json.loads(r['scopes']))<=set(json.loads(g['scopes'])),'E_NOT_FOUND',404);self._allow(g,json.loads(r['scopes']),'read')
-            require(g['role']=='owner' or g['id']==r['issuer'],'E_DENIED',403)
-            return {'delta_id':ident,'status':r['status'],'candidate':json.loads(r['body']) if r['body'] else None,'outcome':json.loads(r['outcome']) if r['outcome'] else None}
-    def decide(self,token,ident,approve):
+
+    def propose_lifecycle(self, token, space, memory_id, revision, *, kind, reason):
+        from .client import proposal
+        require(isinstance(kind, str) and kind in LOCAL_LIFECYCLE_TRANSITIONS, 'E_LIFECYCLE_TRANSITION')
+        require(isinstance(reason, str) and reason.strip() and len(reason) <= 500, 'E_LIFECYCLE_TRANSITION')
+        session = self.session(token)
+        require(session['role'] == 'owner', 'E_DENIED', 403)
+        previous = self.memory_for_update(token, space, memory_id, revision)
+        previous_levels, target_level, _ = LOCAL_LIFECYCLE_TRANSITIONS[kind]
+        require(previous['status'] == 'active' and previous['level'] in previous_levels, 'E_LIFECYCLE_TRANSITION', 409)
+        draft = proposal(session, space, previous['content'], old=previous)
+        draft['delta']['changes'][0].update(domain=LOCAL_LIFECYCLE_DOMAIN,
+                                          candidate={**previous, 'level': target_level, 'status': 'candidate'})
+        draft['delta']['extensions'] = {LOCAL_LIFECYCLE_EXTENSION: {'kind': kind, 'reason': reason.strip()}}
+        draft['bindings'][0]['source_refs'] = [previous['source']['source_ref']]
+        return self.propose(token, draft, allow_lifecycle=True)
+
+    def memory_for_update(self, token, space, memory_id, revision):
+        require(isinstance(memory_id, str) and 0 < len(memory_id) <= 200)
+        require(type(revision) is int and revision > 0)
+        with self.tx(read_only=True) as connection:
+            grant = self._grant(connection, token)
+            self._allow(grant, [space], 'read')
+            self._allow(grant, [space], 'write')
+            row = connection.execute(
+                'SELECT revision, body FROM memories WHERE avatar=? AND space=? AND id=?',
+                (grant['avatar'], space, memory_id),
+            ).fetchone()
+            require(row is not None, 'E_NOT_FOUND', 404)
+            require(row['revision'] == revision, 'E_VERSION_CONFLICT', 409)
+            return json.loads(row['body'])
+
+    def memory_history(self, token, space, memory_id, *, revision=None, before=None, limit=20):
+        require(isinstance(memory_id, str) and 0 < len(memory_id) <= 200)
+        require(type(limit) is int and 1 <= limit <= 100)
+        require(revision is None or before is None)
+        for number in (revision, before):
+            require(number is None or (type(number) is int and 1 <= number <= (1 << 63) - 1))
+
+        with self.tx(read_only=True) as connection:
+            owner = self._grant(connection, token)
+            self._allow(owner, [space], 'read', owner=True)
+            target = {'avatar': owner['avatar'], 'space': space, 'id': memory_id}
+            scope = 'avatar=:avatar AND space=:space AND id=:id'
+            current = connection.execute(f'SELECT revision FROM memories WHERE {scope}', target).fetchone()
+            require(current is not None, 'E_NOT_FOUND', 404)
+            latest = current['revision']
+            result = {'memory_id': memory_id, 'space_ref': space, 'current_revision': latest}
+
+            if revision is not None:
+                require(revision <= latest, 'E_NOT_FOUND', 404)
+                table = 'memories' if revision == latest else 'history'
+                row = connection.execute(
+                    f'SELECT body FROM {table} WHERE {scope} AND revision=:revision',
+                    {**target, 'revision': revision},
+                ).fetchone()
+                require(row is not None, 'E_NOT_FOUND', 404)
+                return {**result, 'record': json.loads(row['body'])}
+
+            revisions = [latest] if before is None or latest < before else []
+            revisions.extend(row['revision'] for row in connection.execute(
+                f'SELECT revision FROM history WHERE {scope} AND revision < :ceiling '
+                'ORDER BY revision DESC LIMIT :page_size',
+                {**target, 'ceiling': latest if before is None else min(latest, before),
+                 'page_size': limit + 1 - len(revisions)},
+            ))
+            return {**result, 'revisions': revisions[:limit],
+                    'next_before': revisions[limit - 1] if len(revisions) > limit else None}
+
+    @staticmethod
+    def _review_classification(memory):
+        return {'level': memory['level'], 'type': memory['type'],
+                'reported_source_type': memory['source']['source_type'],
+                'confidence': memory['confidence'],
+                'stable_preference': memory['lifecycle']['stable_preference']}
+
+    def review(self, token, ident, *, changes=False):
+        require(isinstance(ident, str))
+        with self.tx(read_only=True) as connection:
+            grant = self._grant(connection, token)
+            row = connection.execute('SELECT * FROM deltas WHERE avatar=? AND id=?',
+                                     (grant['avatar'], ident)).fetchone()
+            require(row is not None and set(json.loads(row['scopes'])) <= set(json.loads(grant['scopes'])),
+                    'E_NOT_FOUND', 404)
+            scopes = json.loads(row['scopes'])
+            self._allow(grant, scopes, 'read', owner=changes)
+            require(grant['role'] == 'owner' or grant['id'] == row['issuer'], 'E_DENIED', 403)
+            result = {'delta_id': ident, 'status': row['status'],
+                      'outcome': json.loads(row['outcome']) if row['outcome'] else None}
+            if not changes:
+                return {**result, 'candidate': json.loads(row['body']) if row['body'] else None}
+            if row['status'] != 'proposed':
+                return {**result, 'changes': []}
+
+            envelope = json.loads(row['body'])
+            lifecycle = envelope['delta'].get('extensions', {}).get(LOCAL_LIFECYCLE_EXTENSION)
+            bindings = {binding['change_id']: binding for binding in envelope['bindings']}
+            preview = []
+            for change in envelope['delta']['changes']:
+                binding = bindings[change['change_id']]
+                memory_id = binding['target_object_id']
+                space = binding['scope']['space_ref']
+                require(space in scopes, 'E_NOT_FOUND', 404)
+                current = connection.execute(
+                    'SELECT revision, body FROM memories WHERE avatar=? AND space=? AND id=?',
+                    (grant['avatar'], space, memory_id),
+                ).fetchone()
+                revision = current['revision'] if current else None
+                base_revision = binding['base_revision']
+                current_memory = json.loads(current['body']) if current else None
+                change_preview = {
+                    'memory_id': memory_id, 'space_ref': space, 'operation': change['operation'],
+                    'base_revision': base_revision, 'current_revision': revision,
+                    'revision_conflict': base_revision != (0 if revision is None else revision),
+                    'current_text': current_memory['content'] if current_memory else None,
+                    'proposed_text': change['candidate']['content'],
+                    'current_classification': self._review_classification(current_memory) if current_memory else None,
+                    'proposed_classification': self._review_classification(change['candidate']),
+                }
+                if lifecycle is not None:
+                    change_preview.update(current_level=current_memory['level'] if current_memory else None,
+                                          proposed_level=change['candidate']['level'], transition_reason=lifecycle['reason'])
+                preview.append(change_preview)
+            return {**result, 'changes': preview}
+
+    def pending_proposals(self, token, *, space=None, after=None, limit=20):
+        require(type(limit) is int and 1 <= limit <= 100)
+        require(after is None or (isinstance(after, str) and after))
+        with self.tx(read_only=True) as connection:
+            owner = self._grant(connection, token)
+            allowed_spaces = json.loads(owner['scopes'])
+            self._allow(owner, allowed_spaces if space is None else [space], 'read', owner=True)
+            rows = connection.execute(f'''
+                SELECT delta.id, delta.scopes FROM deltas AS delta
+                WHERE delta.avatar = :avatar AND delta.status = 'proposed'
+                  AND delta.id > :after
+                  AND (:space IS NULL OR EXISTS (
+                      SELECT 1 FROM json_each(delta.scopes) WHERE value = :space
+                  ))
+                  AND {_PROPOSAL_SCOPES_VISIBLE}
+                ORDER BY delta.id LIMIT :page_size
+            ''', {'avatar': owner['avatar'], 'space': space, 'after': after or '',
+                  'allowed': owner['scopes'], 'page_size': limit + 1}).fetchall()
+            proposals = [{'delta_id': row['id'], 'space_refs': json.loads(row['scopes'])}
+                         for row in rows[:limit]]
+            return {'proposals': proposals,
+                    'next_after': proposals[-1]['delta_id'] if len(rows) > limit else None}
+
+    def local_summary(self, token, *, space=None):
+        with self.tx(read_only=True) as connection:
+            owner = self._grant(connection, token)
+            scopes = json.loads(owner['scopes']) if space is None else [space]
+            self._allow(owner, scopes, 'read', owner=True)
+            params = {'avatar': owner['avatar'], 'visible': encode(scopes), 'allowed': owner['scopes']}
+            memory_counts = {row['space']: row for row in connection.execute('''
+                SELECT memory.space,
+                       count(CASE WHEN json_extract(memory.body, '$.level') IN ('M1', 'M2') THEN 1 END) AS active,
+                       count(CASE WHEN json_extract(memory.body, '$.level') = 'M3' THEN 1 END) AS archived
+                FROM memories AS memory
+                JOIN spaces ON spaces.avatar = memory.avatar AND spaces.id = memory.space
+                WHERE memory.avatar = :avatar
+                  AND memory.space IN (SELECT value FROM json_each(:visible))
+                  AND json_extract(memory.body, '$.status') = 'active'
+                  AND json_extract(memory.body, '$.scope.owner_ref') = :owner_ref
+                  AND json_extract(memory.body, '$.scope.space_ref') = memory.space
+                  AND json_extract(memory.body, '$.scope.policy_ref.id') = spaces.policy
+                  AND json_extract(memory.body, '$.scope.policy_ref.version') = spaces.revision
+                GROUP BY memory.space
+            ''', {**params, 'owner_ref': owner['subject']})}
+            pending_counts = dict(connection.execute(f'''
+                SELECT participant.value, count(DISTINCT delta.id)
+                FROM deltas AS delta JOIN json_each(delta.scopes) AS participant
+                WHERE delta.avatar = :avatar AND delta.status = 'proposed'
+                  AND participant.value IN (SELECT value FROM json_each(:visible))
+                  AND {_PROPOSAL_SCOPES_VISIBLE}
+                GROUP BY participant.value
+            ''', params))
+            return {'spaces': [
+                {'space_ref': scope,
+                 'active_memories': memory_counts[scope]['active'] if scope in memory_counts else 0,
+                 'archived_memories': memory_counts[scope]['archived'] if scope in memory_counts else 0,
+                 'pending_proposals': pending_counts.get(scope, 0)}
+                for scope in sorted(scopes)
+            ]}
+
+    def list_audit(self, token, *, space=None, event=None, object_id=None, before=None, limit=20):
+        require(type(limit) is int and 1 <= limit <= 100)
+        require(before is None or (isinstance(before, str) and 0 < len(before) <= 200))
+        require(event is None or (isinstance(event, str) and 0 < len(event) <= 200))
+        require(object_id is None or (isinstance(object_id, str) and bool(object_id)))
+        with self.tx(read_only=True) as connection:
+            owner = self._grant(connection, token)
+            scopes = json.loads(owner['scopes'])
+            self._allow(owner, scopes if space is None else [space], 'read', owner=True)
+            known_spaces = {row['id'] for row in connection.execute(
+                'SELECT id FROM spaces WHERE avatar=?', (owner['avatar'],),
+            )}
+            visible = '''avatar = :avatar AND (
+                space IN (SELECT value FROM json_each(:scopes))
+                OR (space IS NULL AND :include_unscoped)
+            ) AND (:event IS NULL OR event = :event)
+              AND (:object_id IS NULL OR object_id = :object_id)'''
+            params = {'avatar': owner['avatar'], 'scopes': encode(scopes if space is None else [space]),
+                      'include_unscoped': space is None and known_spaces <= set(scopes),
+                      'event': event, 'object_id': object_id}
+            cursor_time = None
+            if before is not None:
+                cursor = connection.execute(f'SELECT at FROM audit WHERE {visible} AND id = :before',
+                                            {**params, 'before': before}).fetchone()
+                require(cursor is not None, 'E_NOT_FOUND', 404)
+                cursor_time = cursor['at']
+            rows = connection.execute(f'''
+                SELECT id AS audit_id, space AS space_ref, event, object_id, at, actor
+                FROM audit WHERE {visible}
+                  AND (:cursor_time IS NULL OR (at, id) < (:cursor_time, :before))
+                ORDER BY at DESC, id DESC LIMIT :page_size
+            ''', {**params, 'cursor_time': cursor_time, 'before': before, 'page_size': limit + 1}).fetchall()
+        return {'events': [dict(row) for row in rows[:limit]],
+                'next_before': rows[limit - 1]['audit_id'] if len(rows) > limit else None}
+
+    def decide(self,token,ident,approve,*,allow_lifecycle=False):
         require(isinstance(ident,str) and type(approve) is bool)
         with self.tx() as c:
             owner=self._grant(c,token);require(owner['role']=='owner','E_DENIED',403);r=c.execute('SELECT * FROM deltas WHERE avatar=? AND id=?',(owner['avatar'],ident)).fetchone()
@@ -265,7 +823,9 @@ class Service:
             if not approve:
                 c.execute('UPDATE deltas SET status=?,body=NULL WHERE avatar=? AND id=?',('rejected',owner['avatar'],ident));self._audit(c,owner['avatar'],None,'delta-rejected',ident,owner['id'])
                 return {'delta_id':ident,'status':'rejected','idempotent':False}
-            issuer=self._grant(c,ident=r['issuer']);envelope=json.loads(r['body']);records=self._validate_delta(c,issuer,envelope)
+            issuer=self._grant(c,ident=r['issuer']);envelope=json.loads(r['body'])
+            records=self._validate_delta(c,issuer,envelope,allow_lifecycle=allow_lifecycle)
+            lifecycle = envelope['delta'].get('extensions', {}).get(LOCAL_LIFECYCLE_EXTENSION)
             receipt=self._audit(c,owner['avatar'],None,'delta-accepted',ident,owner['id']);out=[]
             for proposed,old in records:
                 m=copy.deepcopy(proposed)
@@ -275,9 +835,18 @@ class Service:
                 # Caller timestamps/counts/trust flags never become trusted usage evidence.
                 for k in ('last_used_at','context_use_count','confirmed_use_count'):
                     m['lifecycle'][k]=old['lifecycle'][k] if old else (None if k=='last_used_at' else 0)
-                m['lifecycle']['last_verified']=now;m['recall_count']=old.get('recall_count',0) if old else 0
-                m['source']={k:v for k,v in m['source'].items() if k in ('source_type','source_ref','origin_runtime','origin_device')}
-                m['source'].update(verified=False,signed=False,confirmation_ref=receipt)
+                m['recall_count']=old.get('recall_count',0) if old else 0
+                if lifecycle is not None:
+                    _, target_level, event = LOCAL_LIFECYCLE_TRANSITIONS[lifecycle['kind']]
+                    m['retention']['last_transition'] = {'from': old['level'], 'to': target_level,
+                                                          'reason': lifecycle['reason'], 'at': now}
+                    if target_level == 'M3':
+                        m['retention']['demotion_count'] = m['retention'].get('demotion_count', 0) + 1
+                    self._audit(c, owner['avatar'], m['scope']['space_ref'], event, m['memory_id'], owner['id'])
+                else:
+                    m['lifecycle']['last_verified'] = now
+                    m['source'] = {k:v for k,v in m['source'].items() if k in ('source_type','source_ref','origin_runtime','origin_device')}
+                    m['source'].update(verified=False,signed=False,confirmation_ref=receipt)
                 # Confirmation is attestation of an owner-approved record, not verification of external evidence.
                 validate('memory-record',m)
                 c.execute('INSERT INTO memories VALUES(?,?,?,?,?) ON CONFLICT(avatar,id) DO UPDATE SET space=excluded.space,revision=excluded.revision,body=excluded.body',(owner['avatar'],m['memory_id'],m['scope']['space_ref'],m['revision'],encode(m)))
@@ -354,19 +923,44 @@ class Service:
                                    ((avatar, view_id) for view_id in view_ids))
             self._rebuild_core(connection, avatar)
             return {'deleted': True, 'tombstone': tombstone, 'physical_backup_erasure': 'not_guaranteed'}
-    def archive_cycle(self):
+    def archive_cycle(self, *, dry_run=False):
         # Trusted internal job, not an unauthenticated network operation. No data leaves the service.
         changed=[]
-        with self.tx() as c:
-            for row in c.execute('SELECT * FROM memories').fetchall():
-                m=json.loads(row['body']);lc=m['lifecycle'];ret=m['retention'];now=self.now()
+        candidates = []
+        eligible = 0
+        with self.tx(read_only=dry_run) as c:
+            now = self.now()
+            for row in c.execute('SELECT * FROM memories ORDER BY avatar,id').fetchall():
+                m=json.loads(row['body']);lc=m['lifecycle'];ret=m['retention']
                 if m['status']!='active' or m['level'] not in ('M1','M2'):continue
                 if ret['pinned'] or ret['decay_exempt'] or lc['stable_preference'] or lc['recurrence_ref'] or lc['active_task_refs']:continue
-                if lc['expected_next_use'] and parse(lc['expected_next_use'])<=now+timedelta(days=30):continue
-                last=parse(lc['last_used_at'] or m['created_at'])
-                if last>now or parse(m['created_at'])>now:continue
+                expected_use = parse(lc['expected_next_use']) if lc['expected_next_use'] else None
+                if expected_use and timedelta(0) <= expected_use - now <= timedelta(days=30):
+                    continue
+                # A newly approved correction starts a fresh inactivity window without counting as a use.
+                last = max(parse(value) for value in
+                           (m['created_at'], lc['last_used_at'], lc.get('last_verified')) if value)
+                # The stored revision already exists at its Core-assigned update time.
+                if last > now or parse(m['updated_at']) > now:
+                    continue
+                transition = ret.get('last_transition')
+                if transition and transition['to'] == m['level'] and (
+                        transition['from'], transition['to']) in (('M3', 'M1'), ('M1', 'M2')):
+                    entered_level = parse(transition['at'])
+                    if entered_level <= now:
+                        last = max(last, entered_level)
                 threshold=30 if m['level']=='M1' else 180
                 if (now-last).total_seconds()<threshold*86400:continue
+                if dry_run:
+                    eligible += 1
+                    if len(candidates) < 20:
+                        eligible_since = last + timedelta(days=threshold)
+                        if expected_use and eligible_since <= expected_use < now:
+                            eligible_since = expected_use + timedelta(microseconds=1)
+                        candidates.append({'memory_id': row['id'], 'space_ref': row['space'],
+                                           'base_revision': row['revision'], 'from_level': m['level'],
+                                           'to_level': 'M3', 'eligible_since': stamp(eligible_since)})
+                    continue
                 c.execute('INSERT OR IGNORE INTO history VALUES(?,?,?,?,?)',(row['avatar'],row['id'],row['revision'],row['space'],row['body']))
                 old=m['level'];m['level']='M3';m['previous_revision']=m['revision'];m['revision']+=1;m['updated_at']=stamp(now)
                 m['retention']['last_transition']={'from':old,'to':'M3','reason':'lifecycle:default@1 inactivity threshold; protections evaluated','at':stamp(now)}
@@ -374,4 +968,6 @@ class Service:
                 validate('memory-record',m);c.execute('UPDATE memories SET revision=?,body=? WHERE avatar=? AND id=?',(m['revision'],encode(m),row['avatar'],row['id']))
                 self._audit(c,row['avatar'],row['space'],'memory-archived',row['id'],'internal-lifecycle');changed.append(row['avatar'])
             for av in set(changed):self._rebuild_core(c,av)
+        if dry_run:
+            return {'eligible': eligible, 'candidates': candidates, 'possibly_more': eligible > len(candidates)}
         return {'archived':len(changed)}
