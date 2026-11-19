@@ -29,12 +29,14 @@ def _check_acl(handle):
     acl = security.GetSecurityDescriptorDacl()
     if security.GetSecurityDescriptorOwner() not in trusted or acl is None:
         raise ValueError("Windows ownership or ACL is not private")
+    # Python's mkdir(0o700) grants access to the verified owner via OWNER RIGHTS.
+    allowed = (*trusted, win32security.ConvertStringSidToSid("S-1-3-4"))
     for index in range(acl.GetAceCount()):
         header, *fields = acl.GetAce(index)
         ace_type, flags = header
         if flags & win32security.INHERIT_ONLY_ACE or ace_type == win32security.ACCESS_DENIED_ACE_TYPE:
             continue
-        if ace_type != win32security.ACCESS_ALLOWED_ACE_TYPE or fields[-1] not in trusted:
+        if ace_type != win32security.ACCESS_ALLOWED_ACE_TYPE or fields[-1] not in allowed:
             raise ValueError("Windows ACL grants access outside the current user and system administrators")
 
 
