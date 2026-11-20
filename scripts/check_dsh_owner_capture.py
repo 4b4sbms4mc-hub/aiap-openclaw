@@ -2,7 +2,8 @@
 """Run a synthetic Owner capture check using a stock macOS DSH Desktop host.
 
 Run with PYTHONPATH set to the absolute lavida/core path, or install the Core
-wheel first. Requires the supported DeepSeek Harness desktop build.
+wheel first. Requires the supported DeepSeek Harness desktop build. Pass a
+released archive to check pnpm installation and lockfile restoration.
 """
 import argparse
 import http.cookiejar
@@ -26,7 +27,10 @@ from aiap_core.service import Service, save_private
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--app', type=Path, default=Path('/Applications/DeepSeek Harness.app'))
-parser.add_argument('--plugin', type=Path, default=Path(__file__).resolve().parents[1] / 'aiap-core/dsh-capture')
+plugin_source = Path(__file__).resolve().parents[1] / 'aiap-core/dsh-capture'
+packages = parser.add_mutually_exclusive_group()
+packages.add_argument('--plugin', type=Path, default=plugin_source)
+packages.add_argument('--archive', type=Path)
 args = parser.parse_args()
 resources = args.app / 'Contents/Resources'
 binary = str(resources.parent/'MacOS/DeepSeek Harness')
@@ -34,7 +38,33 @@ entry = resources/'app.asar/dsh/node_modules/@deepseek-ai/dsh-desktop-host/lib/c
 with tempfile.TemporaryDirectory(prefix='aiap-owner-web.') as name:
     root=Path(name); home=root/'home'
     profile=home/'profiles/web'; profile.mkdir(parents=True)
-    shutil.copytree(args.plugin, profile/'node_modules/dsh-aiap-capture')
+    if args.archive:
+        (profile/'package.json').write_text(json.dumps({
+            'name': 'dsh-profile-web', 'private': True,
+            'dsh': {'profile': {'bundles': ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']}},
+        }))
+        (profile/'pnpm-workspace.yaml').write_text('packages: [.]\nnodeLinker: hoisted\nautoInstallPeers: false\n')
+        environment = {**os.environ, 'DSH_APP': str(args.app.resolve()), 'npm_config_offline': 'true'}
+        subprocess.run(
+            ['sh', str(plugin_source/'install-dsh-capture.sh'), str(args.archive.resolve()), str(profile)],
+            env=environment, check=True, timeout=45,
+        )
+        runtime = resources/'runtime/primary-runtime/dependencies'
+        pnpm = [str(runtime/'node/bin/node'), str(runtime/'pnpm/bin/pnpm.cjs')]
+        fixture = root/'unrelated-plugin'
+        fixture.mkdir()
+        (fixture/'package.json').write_text(json.dumps({'name': 'dsh-unrelated-fixture', 'version': '1.0.0'}))
+        subprocess.run([*pnpm, 'add', '--offline', '--ignore-scripts', str(fixture)],
+                       cwd=profile, check=True, timeout=45)
+        dependency = f'file:vendor/aiap/{args.archive.name}'
+        assert json.loads((profile/'package.json').read_text())['dependencies']['dsh-aiap-capture'] == dependency
+        assert dependency in (profile/'pnpm-lock.yaml').read_text()
+        shutil.rmtree(profile/'node_modules')
+        subprocess.run([*pnpm, 'install', '--offline', '--frozen-lockfile', '--ignore-scripts'],
+                       cwd=profile, check=True, timeout=45)
+        print('DSH capture remains installed after adding another plugin and rebuilding node_modules.')
+    else:
+        shutil.copytree(args.plugin, profile/'node_modules/dsh-aiap-capture')
     db=root/'core'; core=Service(db,enable_semantic=False); core.initialize()
     owner=json.loads((db/'owner-credentials.json').read_text())['token']
     save_private(db/'adapter.json',canonical(core.issue_grant(['space:general'],'fixture','deepseek-harness')))
