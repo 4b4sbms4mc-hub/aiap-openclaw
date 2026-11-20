@@ -47,6 +47,7 @@ _SPACE_MANIFEST_PROFILE = 'x-aiap-local-space-manifest-v1'
 _SUMMARY_SELECTION_FILE = 'profile-summary-selections.json'
 _SUMMARY_SELECTION_LIMIT = 16384
 LOCAL_LIFECYCLE_EXTENSION = 'x-aiap-local-memory-lifecycle'
+LOCAL_ADMISSION_EXTENSION = 'x-aiap-local-memory-admission'
 LOCAL_LIFECYCLE_DOMAIN = 'aiap.memory.lifecycle'
 LOCAL_LIFECYCLE_TRANSITIONS = {
     'promote': (('M1',), 'M2', 'memory-promoted'),
@@ -263,6 +264,8 @@ class Service:
         with self.tx(read_only=True) as c:
             g=self._grant(c,token);scopes=json.loads(g['scopes'])
             result = {'avatar_id':g['avatar'],'subject_ref':g['subject'],'role':g['role'],'runtime_ref':g['runtime'],'session_ref':g['session'],'auth_evidence_ref':g['id'],'purpose':g['purpose'],'space_refs':scopes,'scopes':[self._scope(c,g,s) for s in scopes],'issued_at':g['issued'],'expires_at':g['expires'],'actions':json.loads(g['actions']),'retrieval':('scoped-hybrid-cosine' if self.semantic and set(scopes)<=self.semantic.scopes else lexical.METHOD)}
+            result['proposal_admission'] = 'checked-v1'
+            result['proposal_revision'] = True
             if self.semantic and set(scopes) <= self.semantic.scopes:
                 if setup := getattr(self.semantic, 'setup', None):
                     result['embedding_setup'] = setup()
@@ -524,6 +527,105 @@ class Service:
             return {'memory_id': memory_id, 'space_ref': space, 'revision': memory['revision'],
                     'confirmed_use_count': memory['lifecycle']['confirmed_use_count']}
 
+    def preflight_candidate(self, token, body):
+        with self.tx(read_only=True) as connection:
+            grant = self._grant(connection, token)
+            return self._candidate_preflight(connection, grant, body)
+
+    def _active_admission_memories(self, connection, avatar, scope):
+        rows = connection.execute('SELECT body FROM memories WHERE avatar=? AND space=? ORDER BY id',
+                                  (avatar, scope['space_ref']))
+        for row in rows:
+            record = json.loads(row['body'])
+            if record['status'] == 'active' and record['level'] != 'M3' and record['scope'] == scope:
+                yield record
+
+    def _approval_duplicate(self, connection, avatar, candidate):
+        from .admission import normalize_text, same_memory_text
+
+        text = normalize_text(candidate['content'])
+        for record in self._active_admission_memories(connection, avatar, candidate['scope']):
+            if record['memory_id'] != candidate['memory_id'] and same_memory_text(
+                    record, text, candidate['level'], candidate['type']):
+                return {key: record[key] for key in ('memory_id', 'revision')}
+        return None
+
+    def _candidate_preflight(self, connection, grant, body):
+        from .admission import comparison_score, normalize_text, observation_reason, same_memory_text, validate_preflight
+
+        validate_preflight(body)
+        space = body['space_ref']
+        text = normalize_text(body['text'])
+        level = body['level']
+        memory_type = body['memory_type']
+        source = body.get('source_ref')
+        target = body.get('target_memory_id')
+        context = {'space_ref': space, 'level': level, 'memory_type': memory_type, 'trigger': body['trigger'],
+                   'runtime_ref': grant['runtime'], 'source_verified': False, 'requires_owner_confirmation': True}
+
+        def decision(status, reason, **details):
+            return {**context, 'status': status, 'reason': reason, **details}
+
+        self._allow(grant, [space], 'read', body['purpose'])
+        self._allow(grant, [space], 'write', body['purpose'])
+        scope = self._scope(connection, grant, space)
+
+        # Proposal review already limits visibility to the issuer or an Owner with all participating spaces.
+        rows = connection.execute(f"""
+            SELECT delta.id, delta.issuer, delta.body FROM deltas AS delta
+            WHERE delta.avatar = :avatar AND delta.status = 'proposed'
+              AND (:owner OR delta.issuer = :issuer)
+              AND EXISTS (SELECT 1 FROM json_each(delta.scopes) WHERE value = :space)
+              AND {_PROPOSAL_SCOPES_VISIBLE}
+            ORDER BY delta.id
+        """, {'avatar': grant['avatar'], 'owner': grant['role'] == 'owner', 'issuer': grant['id'],
+              'space': space, 'allowed': grant['scopes']})
+        duplicate = None
+        for row in rows:
+            envelope = json.loads(row['body'])
+            for change in envelope['delta']['changes']:
+                candidate = change['candidate']
+                if change['domain'] != 'aiap.memory' or candidate['scope'] != scope:
+                    continue
+                same_candidate = (normalize_text(candidate['content']) == text and candidate['level'] == level
+                                  and candidate['type'] == memory_type
+                                  and ((change['operation'] == 'add' and target is None)
+                                       or (change['operation'] == 'update' and target == candidate['memory_id'])))
+                if source is not None and row['issuer'] == grant['id'] and candidate['source']['source_ref'] == source:
+                    if not same_candidate:
+                        return decision('insufficient-information', 'source-reference-reused-with-different-candidate')
+                    return decision('duplicate', 'same-pending-source', delta_id=row['id'])
+                if same_candidate and duplicate is None:
+                    duplicate = row['id']
+
+        query_terms = set(lexical.terms(text))
+        related = []
+        direct = None
+        for record in self._active_admission_memories(connection, grant['avatar'], scope):
+            ref = {key: record[key] for key in ('memory_id', 'revision', 'level', 'type')}
+            if record['memory_id'] == target:
+                direct = ref
+            if same_memory_text(record, text, level, memory_type):
+                return decision('duplicate', 'same-active-memory', matches=[ref])
+            if target is None and record['level'] == level and record['type'] == memory_type:
+                score = comparison_score(query_terms, record['content'])
+                if score >= 0.5:
+                    related.append((score, ref))
+
+        if target is not None and (direct is None or direct['level'] != level):
+            return decision('insufficient-information', 'target-unavailable-or-level-mismatch')
+        if duplicate:
+            return decision('duplicate', 'same-pending-candidate', delta_id=duplicate)
+        if reason := observation_reason(body):
+            return decision('insufficient-information', reason)
+        if direct is not None:
+            return decision('review-revision', 'explicit-revision-target', matches=[direct])
+        if related:
+            related.sort(key=lambda item: (-item[0], item[1]['memory_id']))
+            return decision('review-revision', 'shared-terms-compare-before-submitting',
+                            matches=[ref for _, ref in related[:3]])
+        return decision('ready-to-propose', 'no-visible-duplicate')
+
     def _validate_delta(self,c,g,envelope,*,allow_lifecycle=False):
         validate('state-delta',envelope);d=envelope['delta'];q=envelope['request'];bs=envelope['bindings'];scopes=q['space_refs']
         self._allow(g,scopes,'write',q['purpose'])
@@ -577,21 +679,84 @@ class Service:
                 require(m['level'] == prior['level'], 'E_LIFECYCLE_TRANSITION', 409)
             records.append((m, prior))
         return records
-    def propose(self,token,envelope,*,allow_lifecycle=False):
-        validate('state-delta',envelope)
-        with self.tx() as c:
-            g=self._grant(c,token);d=envelope['delta'];scopes=envelope['request']['space_refs'];self._allow(g,scopes,'write',envelope['request']['purpose'])
-            if LOCAL_LIFECYCLE_EXTENSION in d.get('extensions', {}):
-                require(allow_lifecycle, 'E_OPERATION_UNSUPPORTED', 422)
-            prior=c.execute('SELECT * FROM deltas WHERE avatar=? AND id=?',(g['avatar'],d['delta_id'])).fetchone()
+    def propose(self, token, envelope, *, allow_lifecycle=False):
+        return self._submit_proposal(token, envelope, allow_lifecycle=allow_lifecycle)
+
+    def propose_checked(self, token, body):
+        from .admission import TRIGGERS
+
+        exact(body, ['envelope', 'trigger'], ['confirm_new'])
+        trigger = body['trigger']
+        confirm_new = body.get('confirm_new', False)
+        require(trigger in TRIGGERS and type(confirm_new) is bool)
+        require(trigger != 'host-observation' or not confirm_new, 'E_CONFIRMATION_REQUIRED', 409)
+        return self._submit_proposal(token, body['envelope'], trigger=trigger,
+                                     confirm_new=confirm_new)
+
+    def propose_revision(self, token, body):
+        from .client import proposal
+
+        exact(body, ['space_ref', 'purpose', 'memory_id', 'base_revision', 'text'])
+        text = body['text']
+        require(isinstance(text, str) and 0 < len(text) <= 4000 and text.strip() and '\x00' not in text)
+        session = self.session(token)
+        require(body['purpose'] == session['purpose'], 'E_DENIED', 403)
+        space = body['space_ref']
+        previous = self.memory_for_update(token, space, body['memory_id'], body['base_revision'])
+        envelope = proposal(session, space, text, old=previous, source_type='inferred')
+        result = self.propose_checked(token, {'envelope': envelope, 'trigger': 'user-request'})
+        return {**result, 'memory_id': previous['memory_id'], 'base_revision': previous['revision'],
+                'level': previous['level'], 'memory_type': previous['type']}
+
+    def _submit_proposal(self, token, envelope, *, allow_lifecycle=False, trigger=None, confirm_new=False):
+        validate('state-delta', envelope)
+        delta = envelope['delta']
+        scopes = envelope['request']['space_refs']
+        purpose = envelope['request']['purpose']
+        extensions = delta.get('extensions', {})
+        require(LOCAL_ADMISSION_EXTENSION not in extensions, 'E_OPERATION_UNSUPPORTED', 422)
+        if LOCAL_LIFECYCLE_EXTENSION in extensions:
+            require(allow_lifecycle, 'E_OPERATION_UNSUPPORTED', 422)
+        if trigger is not None:
+            require(len(delta['changes']) == len(scopes) == 1, 'E_OPERATION_UNSUPPORTED', 422)
+            envelope = copy.deepcopy(envelope)
+            delta = envelope['delta']
+            delta.setdefault('extensions', {})[LOCAL_ADMISSION_EXTENSION] = {
+                'trigger': trigger, 'source_verified': False, 'confirm_new_requested': confirm_new,
+            }
+        delta_id = delta['delta_id']
+        payload_hash = digest(envelope)
+
+        with self.tx() as connection:
+            grant = self._grant(connection, token)
+            self._allow(grant, scopes, 'write', purpose)
+            if trigger is not None:
+                self._allow(grant, scopes, 'read', purpose)
+            prior = connection.execute('SELECT * FROM deltas WHERE avatar=? AND id=?',
+                                       (grant['avatar'], delta_id)).fetchone()
             if prior:
-                require(prior['issuer']==g['id'],'E_DENIED',403)
-                require(prior['payload_hash']==digest(envelope),'E_IDEMPOTENCY_CONFLICT',409)
-                return {'delta_id':d['delta_id'],'status':prior['status'],'idempotent':True}
-            self._validate_delta(c,g,envelope,allow_lifecycle=allow_lifecycle)
-            c.execute('INSERT INTO deltas VALUES(?,?,?,?,?,?,?,?)',(g['avatar'],d['delta_id'],g['id'],encode(scopes),digest(envelope),encode(envelope),'proposed',None))
-            self._audit(c,g['avatar'],None,'delta-proposed',d['delta_id'],g['id'])
-            return {'delta_id':d['delta_id'],'status':'proposed','idempotent':False}
+                require(prior['issuer'] == grant['id'], 'E_DENIED', 403)
+                require(prior['payload_hash'] == payload_hash, 'E_IDEMPOTENCY_CONFLICT', 409)
+                return {'delta_id': delta_id, 'status': prior['status'], 'idempotent': True}
+
+            records = self._validate_delta(connection, grant, envelope, allow_lifecycle=allow_lifecycle)
+            if trigger is not None:
+                (candidate, previous), = records
+                request = {'space_ref': scopes[0], 'purpose': purpose, 'text': candidate['content'],
+                           'level': candidate['level'], 'memory_type': candidate['type'],
+                           'trigger': trigger, 'source_ref': candidate['source']['source_ref']}
+                if previous is not None:
+                    request['target_memory_id'] = previous['memory_id']
+                preview = self._candidate_preflight(connection, grant, request)
+                can_submit = (preview['status'] == 'ready-to-propose'
+                              or preview['status'] == 'review-revision' and (previous is not None or confirm_new))
+                if not can_submit:
+                    return {**preview, 'submitted': False}
+            connection.execute('INSERT INTO deltas VALUES(?,?,?,?,?,?,?,?)',
+                               (grant['avatar'], delta_id, grant['id'], encode(scopes), payload_hash,
+                                encode(envelope), 'proposed', None))
+            self._audit(connection, grant['avatar'], None, 'delta-proposed', delta_id, grant['id'])
+            return {'delta_id': delta_id, 'status': 'proposed', 'idempotent': False}
 
     def propose_lifecycle(self, token, space, memory_id, revision, *, kind, reason):
         from .client import proposal
@@ -687,7 +852,9 @@ class Service:
                 return {**result, 'changes': []}
 
             envelope = json.loads(row['body'])
-            lifecycle = envelope['delta'].get('extensions', {}).get(LOCAL_LIFECYCLE_EXTENSION)
+            extensions = envelope['delta'].get('extensions', {})
+            lifecycle = extensions.get(LOCAL_LIFECYCLE_EXTENSION)
+            admission = extensions.get(LOCAL_ADMISSION_EXTENSION)
             bindings = {binding['change_id']: binding for binding in envelope['bindings']}
             preview = []
             for change in envelope['delta']['changes']:
@@ -710,14 +877,33 @@ class Service:
                     'proposed_text': change['candidate']['content'],
                     'current_classification': self._review_classification(current_memory) if current_memory else None,
                     'proposed_classification': self._review_classification(change['candidate']),
+                    'proposal_source': {'runtime_ref': envelope['delta']['runtime_id'],
+                                        'reported_reference': change['candidate']['source']['source_ref']},
                 }
                 if lifecycle is not None:
                     change_preview.update(current_level=current_memory['level'] if current_memory else None,
                                           proposed_level=change['candidate']['level'], transition_reason=lifecycle['reason'])
+                if admission is not None:
+                    duplicate = self._approval_duplicate(connection, grant['avatar'], change['candidate'])
+                    if duplicate is not None:
+                        change_preview['active_duplicate'] = duplicate
                 preview.append(change_preview)
+            if admission is not None:
+                result['admission'] = admission
+            try:
+                self._allow(grant, scopes, 'write', owner=True)
+                self._approval_records(connection, grant, row, envelope, allow_lifecycle=True)
+            except Fault as exc:
+                result['approval_check'] = {'status': 'blocked', 'code': exc.code}
+            else:
+                result['approval_check'] = {'status': 'ready'}
             return {**result, 'changes': preview}
 
-    def pending_proposals(self, token, *, space=None, after=None, limit=20):
+    def pending_proposals(self, token, *, space=None, after=None, limit=20, trigger=None):
+        from .admission import TRIGGERS
+
+        require(trigger is None or trigger in (*TRIGGERS, 'legacy'))
+        trigger_value = "COALESCE(json_extract(delta.body, :trigger_path), 'legacy')"
         require(type(limit) is int and 1 <= limit <= 100)
         require(after is None or (isinstance(after, str) and after))
         with self.tx(read_only=True) as connection:
@@ -725,18 +911,24 @@ class Service:
             allowed_spaces = json.loads(owner['scopes'])
             self._allow(owner, allowed_spaces if space is None else [space], 'read', owner=True)
             rows = connection.execute(f'''
-                SELECT delta.id, delta.scopes FROM deltas AS delta
+                SELECT delta.id, delta.scopes, {trigger_value} AS trigger FROM deltas AS delta
                 WHERE delta.avatar = :avatar AND delta.status = 'proposed'
                   AND delta.id > :after
+                  AND (:trigger IS NULL OR {trigger_value} = :trigger)
                   AND (:space IS NULL OR EXISTS (
                       SELECT 1 FROM json_each(delta.scopes) WHERE value = :space
                   ))
                   AND {_PROPOSAL_SCOPES_VISIBLE}
                 ORDER BY delta.id LIMIT :page_size
             ''', {'avatar': owner['avatar'], 'space': space, 'after': after or '',
-                  'allowed': owner['scopes'], 'page_size': limit + 1}).fetchall()
-            proposals = [{'delta_id': row['id'], 'space_refs': json.loads(row['scopes'])}
-                         for row in rows[:limit]]
+                  'allowed': owner['scopes'], 'page_size': limit + 1, 'trigger': trigger,
+                  'trigger_path': f'$.delta.extensions."{LOCAL_ADMISSION_EXTENSION}".trigger'}).fetchall()
+            proposals = []
+            for row in rows[:limit]:
+                entry = {'delta_id': row['id'], 'space_refs': json.loads(row['scopes'])}
+                if row['trigger'] != 'legacy' or trigger is not None:
+                    entry['trigger'] = row['trigger']
+                proposals.append(entry)
             return {'proposals': proposals,
                     'next_after': proposals[-1]['delta_id'] if len(rows) > limit else None}
 
@@ -812,6 +1004,15 @@ class Service:
         return {'events': [dict(row) for row in rows[:limit]],
                 'next_before': rows[limit - 1]['audit_id'] if len(rows) > limit else None}
 
+    def _approval_records(self, connection, owner, pending, envelope, *, allow_lifecycle):
+        issuer = self._grant(connection, ident=pending['issuer'])
+        records = self._validate_delta(connection, issuer, envelope, allow_lifecycle=allow_lifecycle)
+        if LOCAL_ADMISSION_EXTENSION in envelope['delta'].get('extensions', {}):
+            for candidate, _ in records:
+                require(self._approval_duplicate(connection, owner['avatar'], candidate) is None,
+                        'E_DUPLICATE_MEMORY', 409)
+        return records
+
     def decide(self,token,ident,approve,*,allow_lifecycle=False):
         require(isinstance(ident,str) and type(approve) is bool)
         with self.tx() as c:
@@ -823,8 +1024,8 @@ class Service:
             if not approve:
                 c.execute('UPDATE deltas SET status=?,body=NULL WHERE avatar=? AND id=?',('rejected',owner['avatar'],ident));self._audit(c,owner['avatar'],None,'delta-rejected',ident,owner['id'])
                 return {'delta_id':ident,'status':'rejected','idempotent':False}
-            issuer=self._grant(c,ident=r['issuer']);envelope=json.loads(r['body'])
-            records=self._validate_delta(c,issuer,envelope,allow_lifecycle=allow_lifecycle)
+            envelope = json.loads(r['body'])
+            records = self._approval_records(c, owner, r, envelope, allow_lifecycle=allow_lifecycle)
             lifecycle = envelope['delta'].get('extensions', {}).get(LOCAL_LIFECYCLE_EXTENSION)
             receipt=self._audit(c,owner['avatar'],None,'delta-accepted',ident,owner['id']);out=[]
             for proposed,old in records:

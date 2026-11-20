@@ -243,6 +243,44 @@ class ProcessTests(unittest.TestCase):
             self.assertEqual(stored['source']['source_type'], 'observed')
             self.assertFalse(stored['source']['verified'])
 
+    def test_dsh_observation_cli_deduplicates_and_stays_pending(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service = Service(directory, enable_semantic=False)
+            service.initialize()
+            owner_file = Path(directory) / 'owner-credentials.json'
+            owner = json.loads(owner_file.read_text())['token']
+            adapter_file = Path(directory) / 'adapter.json'
+            adapter_file.write_text(json.dumps(service.issue_grant(['space:general'], 'fixture', 'deepseek-harness')))
+
+            def capture(body, credential=adapter_file):
+                return subprocess.run([sys.executable, '-m', 'aiap_core', '--data-dir', directory,
+                                       'capture-owner-observation', '--credential-file', str(credential),
+                                       '--space', 'space:general'],
+                                      input=json.dumps(body), text=True, cwd=ROOT, capture_output=True, timeout=10)
+
+            body = {'session_id': 'session-fixture', 'message_id': 'message-1', 'text': '我喜欢用中文写周报。'}
+            result = capture(body)
+            self.assertEqual(result.returncode, 0, result.stdout)
+            proposal = json.loads(result.stdout)
+            self.assertEqual(proposal['status'], 'proposed')
+            delta = proposal['delta_id']
+            self.assertTrue(json.loads(capture(body).stdout)['idempotent'])
+            self.assertEqual(capture({**body, 'text': '我喜欢用英文写周报。'}).stdout.strip(),
+                             'E_IDEMPOTENCY_CONFLICT')
+            skipped = capture({**body, 'message_id': 'message-2', 'text': '我今天喜欢用中文。'})
+            self.assertEqual(json.loads(skipped.stdout)['reason'], 'unsupported-preference-statement')
+            self.assertEqual(capture(body, owner_file).stdout.strip(), 'E_DENIED')
+            pending, = service.pending_proposals(owner)['proposals']
+            self.assertEqual(pending['delta_id'], delta)
+            self.assertEqual(pending['trigger'], 'host-observation')
+            review = service.review(owner, delta, changes=True)
+            self.assertEqual(review['changes'][0]['proposed_classification']['reported_source_type'], 'observed')
+            self.assertFalse(review['admission']['source_verified'])
+            self.assertEqual(sum(space['active_memories'] for space in service.local_summary(owner)['spaces']), 0)
+            service.decide(owner, delta, True)
+            retry = json.loads(capture(body).stdout)
+            self.assertEqual((retry['status'], retry['idempotent']), ('accepted', True))
+
     def test_local_promotion_preserves_provenance_and_rejects_stale_proposals(self):
         with tempfile.TemporaryDirectory() as directory:
             data = Path(directory)

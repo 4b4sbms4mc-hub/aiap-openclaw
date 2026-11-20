@@ -31,6 +31,8 @@ try {
  assert.equal((await a.search({query:'商务舱'})).results.length,0);
  const review=await ownerCall('/v1/deltas/review',{delta_id:delta});
  assert.equal(review.status,'proposed');const memory=review.candidate.delta.changes[0].candidate;
+ assert.deepEqual(review.candidate.delta.extensions['x-aiap-local-memory-admission'],
+   {trigger:'host-observation',source_verified:false,confirm_new_requested:false});
  assert.equal(memory.content,accepted[0]);assert.equal(memory.source.source_type,'explicit-user');assert.equal(memory.type,'preference-evidence');
  assert.equal(memory.scope.space_ref,'space:general');assert.equal(review.candidate.bindings[0].confirmation_ref,null);
  const journal=JSON.parse(await readFile(cfg.autoPropose.stateDir+'/state.json'));
@@ -68,14 +70,43 @@ try {
  const statusTool=factories.get('aiap_memory_status')({agentId:'main',sessionKey:'agent:main:main',senderIsOwner:true});
  const status=await statusTool.execute('status',{});assert.equal(status.details.automatic_proposals.enabled,true);assert(status.details.automatic_proposals.candidates.some(x=>x.delta_id===rejected&&x.status==='rejected'));
  assert(!JSON.stringify(status).includes(credential.token));ok('plugin hook registration and owner status expose candidate IDs and current review states');
+ const chinese = await a.propose({text:'以后请默认用中文回复。',memory_type:'preference-evidence'});
+ await ownerCall('/v1/deltas/decide',{delta_id:chinese.delta_id,approve:true});
+ const entryCount=()=>readFile(cfg.autoPropose.stateDir+'/state.json').then(raw=>JSON.parse(raw).entries.length);
+ const countBefore=await entryCount();
+ await turn('以后请默认用英文回复。');
+ assert.equal(auto.last.status,'review-revision');assert.equal(auto.last.outcome,'skipped');
+ assert.equal(auto.last.matches.length,1);
+ assert.equal(await entryCount(),countBefore);
+ const waiting=await a.propose({text:'我更喜欢用要点列出问题。',memory_type:'preference-evidence'});
+ await turn('我更喜欢用要点列出问题。');
+ assert.equal(auto.last.outcome,'duplicate');assert.equal(auto.last.delta_id,waiting.delta_id);
+ assert.equal(await entryCount(),countBefore);
+ ok('related records and existing pending candidates suppress automatic proposals without fake journal entries');
  await chmod(cfg.autoPropose.stateDir+'/state.json',0o644);await turn('我喜欢完整而清晰的说明。');assert.equal(auto.last.reason,'E_AUTO_STATE_PERMISSIONS');await chmod(cfg.autoPropose.stateDir+'/state.json',0o600);
  const link=f.directory+'/linked-auto';await symlink(cfg.autoPropose.stateDir,link);const unsafe=new AutoProposer({...cfg,autoPropose:{enabled:true,stateDir:link}});assert.equal((await unsafe.status()).error,'E_AUTO_STATE_PERMISSIONS');
  ok('unsafe registry permissions and symlink directories fail closed');
  await mkdir(f.directory+'/uncertain',{mode:0o700});auto=new AutoProposer({...cfg,autoPropose:{enabled:true,stateDir:f.directory+'/uncertain'}});
  const realCall=Adapter.prototype.call;let drop=true;
- Adapter.prototype.call=async function(...args){const r=await realCall.apply(this,args);if(args[1]==='/v1/deltas/propose'&&drop){drop=false;throw new Error('simulate lost response')}return r};
+ Adapter.prototype.call=async function(...args){const r=await realCall.apply(this,args);if(args[1]==='/v1/deltas/propose-checked'&&drop){drop=false;throw new Error('simulate lost response')}return r};
  try {await turn('我喜欢使用清晰的小标题。');assert.equal(auto.last.outcome,'unavailable');await turn('我喜欢使用清晰的小标题。');assert.equal(auto.last.outcome,'duplicate');assert.equal(auto.last.status,'proposed')}finally{Adapter.prototype.call=realCall}
  ok('lost response reconciles the Core candidate instead of adding another');
+ const realSession=Adapter.prototype.session;
+ Adapter.prototype.session=async function(...args){
+   const result=await realSession.apply(this,args);
+   delete result.session.proposal_admission;
+   return result;
+ };
+ try {
+   await turn('我偏好使用大号字。');
+   assert.equal(auto.last.outcome,'proposed');
+   const legacyReview=await ownerCall('/v1/deltas/review',{delta_id:auto.last.delta_id});
+   assert.equal(legacyReview.status,'proposed');
+   assert.equal(legacyReview.candidate.delta.extensions,undefined);
+ } finally {
+   Adapter.prototype.session=realSession;
+ }
+ ok('legacy Core capability retains the original automatic proposal route');
  const mutate=spawn(process.env.AIAP_TEST_PYTHON??'python3',['-c','from aiap_core.service import Service; import sys; Service(sys.argv[1]).revoke_grant(sys.argv[2])',f.directory,credential.grant_id],{env:process.env,stdio:'inherit'});assert.equal((await once(mutate,'exit'))[0],0);
  await turn('我喜欢使用更大的字体。');assert.equal(auto.last.reason,'E_HTTP_401');ok('revoked adapter grant stops automatic writes');
  console.log(`PASS ${checks} automatic checks. Real temporary Core HTTP; simulated OpenClaw hook dispatch. NAS runtime acceptance still required.`);

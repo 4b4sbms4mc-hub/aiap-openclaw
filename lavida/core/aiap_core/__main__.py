@@ -4,6 +4,7 @@ from tempfile import TemporaryDirectory
 from .service import Service, save_private
 from .server import serve
 from .client import Client,proposal
+from .admission import TRIGGERS
 from .contracts import canonical,Fault,require
 
 _LIFECYCLE_COMMANDS = {
@@ -68,7 +69,7 @@ def _read_session_excerpt():
 
 
 def main():
-    ap=argparse.ArgumentParser(description='AIAP Core Service 0.2.1 — Wang Lu');ap.add_argument('--data-dir',default=os.environ.get('AIAP_DATA_DIR','./data'));sp=ap.add_subparsers(dest='command',required=True)
+    ap=argparse.ArgumentParser(description='AIAP Core Service 0.2.2 — Wang Lu');ap.add_argument('--data-dir',default=os.environ.get('AIAP_DATA_DIR','./data'));sp=ap.add_subparsers(dest='command',required=True)
     sp.add_parser('init',help='Initialize once without overwriting an existing identity.')
     sv=sp.add_parser('serve');sv.add_argument('--host',default='127.0.0.1');sv.add_argument('--port',type=int,default=8042);sv.add_argument('--archive-interval',type=int,default=3600)
     g=sp.add_parser('grant');g.add_argument('--spaces',nargs='+',required=True);g.add_argument('--purpose',required=True);g.add_argument('--runtime',required=True);g.add_argument('--role',choices=['adapter','owner'],default='adapter');g.add_argument('--days',type=int,default=7);g.add_argument('--output',required=True)
@@ -82,9 +83,12 @@ def main():
     grants.add_argument('--role', choices=('owner', 'adapter'))
     grants.add_argument('--after', help='Continue from the previous page’s next_after value.')
     grants.add_argument('--limit', type=int, default=20)
+    preflight = sp.add_parser('preflight-candidate', help='Check a JSON memory candidate from stdin without submitting it.')
+    preflight.add_argument('--credential-file', required=True)
     pending = sp.add_parser('pending', help='List local proposals awaiting an Owner decision.')
     pending.add_argument('--credential-file', required=True)
     pending.add_argument('--space', help='Show proposals that include this space.')
+    pending.add_argument('--trigger', choices=(*TRIGGERS, 'legacy'), help='Filter by the reported proposal trigger.')
     pending.add_argument('--after', help='Continue from the previous page’s next_after value.')
     pending.add_argument('--limit', type=int, default=20)
     procedural_commands = {'capability': '--capability-id', 'workflow': '--workflow-id', 'runtime-binding': '--binding-id'}
@@ -110,6 +114,9 @@ def main():
         for operation in operations:
             operation.add_argument('--credential-file', required=True)
             operation.add_argument('--space', required=True)
+    observation = sp.add_parser('capture-owner-observation', help='Check and queue one host-reported Owner preference from stdin.')
+    observation.add_argument('--credential-file', required=True)
+    observation.add_argument('--space', choices=('space:general',), required=True)
     capture = sp.add_parser('capture-session', help='Propose one selected UTF-8 session excerpt from stdin as M1.')
     capture.add_argument('--credential-file', required=True)
     capture.add_argument('--space', required=True)
@@ -296,7 +303,7 @@ def main():
         print(json.dumps(result,ensure_ascii=False,indent=2))
         return
     local=getattr(args,'local',False)
-    local_commands = ('pending', *procedural_commands, 'capture-session', 'context', 'context-ack', 'confirm-use',
+    local_commands = ('preflight-candidate', 'pending', *procedural_commands, 'capture-session', 'capture-owner-observation', 'context', 'context-ack', 'confirm-use',
                       'summary', 'history', 'grants', 'grant-reissue', 'audit',
                       'compact-core', 'compact-manifest', 'profile-summary',
                       'profile-summary-select', 'profile-summary-clear', *_LIFECYCLE_COMMANDS)
@@ -333,9 +340,16 @@ def main():
     elif args.command=='grant-status':result=s.grant_status(_read_grant_token(args.credential_file))
     elif args.command == 'grants':
         result = s.list_grants(role=args.role, after=args.after, limit=args.limit)
+    elif args.command == 'preflight-candidate':
+        from .server import reject_duplicates
+        try:
+            body = json.loads(_read_session_excerpt(), object_pairs_hook=reject_duplicates)
+        except (ValueError, RecursionError):
+            raise Fault('E_SCHEMA') from None
+        result = s.preflight_candidate(_read_grant_token(args.credential_file), body)
     elif args.command == 'pending':
         result = s.pending_proposals(_read_grant_token(args.credential_file), space=args.space,
-                                     after=args.after, limit=args.limit)
+                                     after=args.after, limit=args.limit, trigger=args.trigger)
     elif args.command in procedural_commands:
         from .procedural import list_descriptors, read_descriptor, resolve_capability, resolve_workflow, save_descriptor
         token = _read_grant_token(args.credential_file)
@@ -349,6 +363,33 @@ def main():
                              runtime_version=args.runtime_version, agent_inventory=args.agent_inventory)
         else:
             result = list_descriptors(s, args.command, token, args.space, after=args.after, limit=args.limit)
+    elif args.command == 'capture-owner-observation':
+        from .server import reject_duplicates
+        from .contracts import exact
+
+        try:
+            body = json.loads(_read_session_excerpt(), object_pairs_hook=reject_duplicates)
+        except (ValueError, RecursionError):
+            raise Fault('E_SCHEMA') from None
+        exact(body, ['session_id', 'message_id', 'text'])
+        for key in ('session_id', 'message_id'):
+            require(isinstance(body[key], str) and re.fullmatch(r'[A-Za-z0-9._:-]{1,128}', body[key]))
+        require(isinstance(body['text'], str) and 0 < len(body['text']) <= 400 and body['text'].strip())
+        token = _read_grant_token(args.credential_file)
+        session = s.session(token)
+        require(session['role'] == 'adapter' and session['space_refs'] == [args.space]
+                and 'write' in session['actions'], 'E_DENIED', 403)
+        observation_key = ['aiap-local-dsh-observation-v1', session['avatar_id'], session['auth_evidence_ref'],
+                           args.space, body['session_id'], body['message_id']]
+        namespace = uuid.uuid5(uuid.NAMESPACE_URL, canonical(observation_key).decode('utf-8'))
+        envelope = proposal(session, args.space, body['text'], source_type='observed', id_namespace=namespace)
+        source = 'evidence:dsh-host:' + str(namespace)
+        change = envelope['delta']['changes'][0]
+        change['candidate']['type'] = 'preference-evidence'
+        change['candidate']['source']['source_ref'] = source
+        change['evidence'] = [{'source_ref': source}]
+        envelope['bindings'][0]['source_refs'] = [source]
+        result = s.propose_checked(token, {'envelope': envelope, 'trigger': 'host-observation'})
     elif args.command == 'capture-session':
         token = _read_grant_token(args.credential_file)
         session = s.session(token)

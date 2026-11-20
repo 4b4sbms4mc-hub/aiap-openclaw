@@ -2,7 +2,7 @@ import {open, mkdir, lstat, rename, unlink} from 'node:fs/promises';
 import {constants} from 'node:fs';
 import {join} from 'node:path';
 import {createHash, createHmac, randomBytes} from 'node:crypto';
-import {Adapter, AdapterError, bindingFor, buildProposal} from './adapter.js';
+import {Adapter, AdapterError, admissionResult, bindingFor, buildProposal} from './adapter.js';
 import {ProcessObserver} from './diagnostics.js';
 import {readCanonicalOwnerMessage,sourceDiagnostics} from './source.js';
 
@@ -195,7 +195,22 @@ export class AutoProposer {
         }
         const envelope=buildProposal(session,b.spaceRef,text,item);
         try {
-          const r=await a.call(token,'/v1/deltas/propose',envelope,signal);
+          const checked = session.proposal_admission === 'checked-v1';
+          const r = checked
+            ? await a.call(token, '/v1/deltas/propose-checked', {envelope, trigger:'host-observation'}, signal)
+            : await a.call(token, '/v1/deltas/propose', envelope, signal);
+          if (checked && r.submitted === false) {
+            const result = admissionResult(r, b.spaceRef);
+            state.entries.splice(state.entries.indexOf(item), 1);
+            await save();
+            this.last = {
+              outcome: result.status === 'duplicate' ? 'duplicate' : 'skipped',
+              status: result.status, reason: result.reason,
+              ...(result.delta_id ? {delta_id: result.delta_id} : {}),
+              ...(result.matches ? {matches: result.matches} : {}),
+            };
+            return;
+          }
           if (r.delta_id!==item.delta_id || !['proposed','accepted','rejected'].includes(r.status)) fail('E_RESPONSE');
           item.status=r.status;delete item.error;await save();
           this.last={outcome:r.status==='proposed'?'proposed':'duplicate',delta_id:r.delta_id,status:r.status};

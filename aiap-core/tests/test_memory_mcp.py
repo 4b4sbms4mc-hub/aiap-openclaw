@@ -34,9 +34,12 @@ class MemoryAdmissionTests(unittest.IsolatedAsyncioTestCase):
         save_private(credential, json.dumps(grant).encode())
         args = SimpleNamespace(credential_file=credential, avatar_id=avatar,
                                space='space:general', purpose='aiap-memory', runtime='fixture')
+        self.bound_service = self.core
         if self.local:
             args.data_dir = data
-            self.server = _server(_LocalCore(args))
+            binding = _LocalCore(args)
+            self.bound_service = binding.service
+            self.server = _server(binding)
             return
         http = Server(('127.0.0.1', 0), self.core)
         thread = Thread(target=http.serve_forever, kwargs={'poll_interval': 0.01}, daemon=True)
@@ -72,10 +75,80 @@ class MemoryAdmissionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((found['level'], found['memory_type'], found['source_type'], found['confidence']),
                              (level, kind, 'inferred', 0.5))
 
+    async def test_checked_proposals_report_duplicates_and_related_records(self):
+        status = await self.call('aiap_memory_status')
+        self.assertEqual(status['proposal_admission'], 'checked-v1')
+        original = {'text': '以后请默认用中文回复。', 'memory_type': 'preference-evidence',
+                    'trigger': 'user-request'}
+        created = await self.call('aiap_memory_propose', **original)
+        repeated = await self.call('aiap_memory_propose', **original)
+        self.assertEqual((repeated['status'], repeated['delta_id']), ('duplicate', created['delta_id']))
+        self.assertFalse(repeated['submitted'])
+        approved = self.core.decide(self.owner, created['delta_id'], True)['objects'][0]
+        self.assertEqual((await self.call('aiap_memory_propose', **original))['reason'], 'same-active-memory')
+
+        changed = {**original, 'text': '以后请默认用英文回复。'}
+        compared = await self.call('aiap_memory_propose', **changed)
+        self.assertEqual(compared['status'], 'review-revision')
+        self.assertEqual(compared['matches'], [{'memory_id': approved['memory_id'], 'revision': 1}])
+        self.assertEqual(self.core.pending_proposals(self.owner)['proposals'], [])
+        separate = await self.call('aiap_memory_propose', **changed, confirm_new=True)
+        self.assertEqual(separate['status'], 'proposed')
+        review = self.core.review(self.owner, separate['delta_id'], changes=True)
+        self.assertEqual(review['admission']['trigger'], 'user-request')
+        self.assertTrue(review['admission']['confirm_new_requested'])
+
+    async def test_user_can_propose_a_revision_with_current_scope_and_version(self):
+        from aiap_core.client import proposal
+
+        previous = self.core.propose(self.owner, proposal(
+            self.core.session(self.owner), 'space:general', '一直使用中文回复。', pinned=True))
+        approved = self.core.decide(self.owner, previous['delta_id'], True)['objects'][0]
+        status = await self.call('aiap_memory_status')
+        self.assertTrue(status['proposal_revision'])
+        arguments = {'text': '以后改用英文回复。', 'trigger': 'user-request',
+                     'memory_id': approved['memory_id'], 'base_revision': approved['revision']}
+        with self.assertRaisesRegex(ToolError, 'E_ARGUMENTS'):
+            await self.call('aiap_memory_propose', **{**arguments, 'trigger': 'agent-inference'})
+        with self.assertRaisesRegex(ToolError, '409'):
+            await self.call('aiap_memory_propose', **{**arguments, 'base_revision': approved['revision'] + 1})
+
+        result = await self.call('aiap_memory_propose', **arguments)
+        self.assertEqual((result['status'], result['memory_id'], result['memory_type']),
+                         ('proposed', approved['memory_id'], 'preference-evidence'))
+        review, = self.core.review(self.owner, result['delta_id'], changes=True)['changes']
+        self.assertEqual(review['current_text'], '一直使用中文回复。')
+        self.assertEqual(review['proposed_text'], '以后改用英文回复。')
+        self.assertTrue(review['proposed_classification']['stable_preference'])
+        self.core.decide(self.owner, result['delta_id'], True)
+        found = (await self.call('aiap_memory_search', query='以后改用英文回复。'))['results']
+        self.assertEqual([(item['id'], item['revision']) for item in found], [(approved['memory_id'], 2)])
+        with self.assertRaisesRegex(ToolError, '409'):
+            await self.call('aiap_memory_propose', **arguments)
+
+    async def test_legacy_capability_uses_existing_proposal_path(self):
+        from unittest.mock import patch
+
+        old_session = self.bound_service.session
+
+        def legacy_session(token):
+            return {key: val for key, val in old_session(token).items() if key not in {'proposal_admission', 'proposal_revision'}}
+
+        with patch.object(self.bound_service, 'session', side_effect=legacy_session):
+            self.assertEqual((await self.call('aiap_memory_status'))['proposal_admission'], 'legacy')
+            with self.assertRaisesRegex(ToolError, 'E_PROPOSAL_REVISION_UNSUPPORTED'):
+                await self.call('aiap_memory_propose', text='Old Core revision request', trigger='user-request',
+                                memory_id='mem:fixture', base_revision=1)
+            result = await self.call('aiap_memory_propose', text='Legacy grant scenario')
+            self.assertEqual(result['status'], 'proposed')
+            review = self.core.review(self.owner, result['delta_id'], changes=True)
+            self.assertNotIn('admission', review)
+
     async def test_invalid_classification_cannot_create_a_proposal(self):
         before = self.core.db.read_bytes()
         for arguments in ({'level': 'M0'}, {'level': 'M3'}, {'level': None},
-                          {'memory_type': 'hypothesis'}, {'memory_type': None}):
+                          {'memory_type': 'hypothesis'}, {'memory_type': None},
+                          {'trigger': 'host-observation'}, {'confirm_new': 'true'}):
             with self.assertRaises(ToolError):
                 await self.call('aiap_memory_propose', text='Fixture', **arguments)
         self.assertEqual(self.core.db.read_bytes(), before)
