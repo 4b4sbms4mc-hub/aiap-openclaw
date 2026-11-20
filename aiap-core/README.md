@@ -107,10 +107,19 @@ La Vida's opt-in automatic capture uses checked submission with the host-observa
 
 Automatic proposals use an optional DSH host plugin alongside the Memory MCP. This release supports the audited DSH Desktop 0.2.2-rc.5 SessionController and disables capture on unknown host versions. It leaves the signed DSH application files untouched. The standard Memory MCP remains available independently.
 
-1. Download `dsh-aiap-capture-0.3.6.tar.gz` with the wheels and verify it against `SHA256SUMS-MCP.txt`.
-2. Extract the archive into the DSH profile's `node_modules` directory. For the default Desktop profile, the result is `~/.dsh/profiles/desktop/node_modules/dsh-aiap-capture/index.mjs`.
-3. Use the Core CLI to issue a separate single-space Adapter grant for `space:general`, with `--purpose aiap-auto-capture --runtime deepseek-harness`. Store it in a private file. Only the Adapter credential belongs in the plugin configuration.
-4. Add the following as an additional item in the same profile's `cordis.patch.yml` list and restart DSH. Use absolute paths. Keep the preferences file inside a private directory.
+1. Download `dsh-aiap-capture-0.3.6.tar.gz`, `SHA256SUMS-MCP.txt`, and `install-dsh-capture.sh` from the [release](https://github.com/4b4sbms4mc-hub/aiap-openclaw/releases/tag/aiap-mcp-v0.3.6). Open a terminal in the download directory.
+2. On macOS, run the installer. For a different DSH profile, pass its path as the second argument.
+
+   ```sh
+   sh ./install-dsh-capture.sh ./dsh-aiap-capture-0.3.6.tar.gz
+   ```
+
+   The installer verifies the archive, copies it to `vendor/aiap/` inside the profile, and runs `pnpm add`. This records a relative `file:` dependency in the profile's `package.json` and `pnpm-lock.yaml`. Keep the tarball at that path so pnpm can recreate the installation. The installer uses the bundled macOS pnpm when available. A shell with pnpm and `shasum` on PATH can use the same installer with an explicit profile path.
+
+   **Already installed by hand?** Run the same command. It registers the existing plugin package with pnpm. Keep the current Cordis entry, Adapter grant, and preferences, then restart DSH. To change versions, use the desired release archive and its checksum manifest.
+
+3. For a fresh capture setup, use the Core CLI to issue a separate single-space Adapter grant for `space:general`, with `--purpose aiap-auto-capture --runtime deepseek-harness`. Store it in a private file. Only the Adapter credential belongs in the plugin configuration.
+4. For a fresh capture setup, add the following as an additional item in the same profile's `cordis.patch.yml` list and restart DSH. Use absolute paths. Keep the preferences file inside a private directory.
 
 ```yaml
 - insert:
@@ -125,7 +134,7 @@ Automatic proposals use an optional DSH host plugin alongside the Memory MCP. Th
 
 Automatic proposals start off in every session. Send the exact message `开启 AIAP 自动提案` as the authenticated Owner in a session and let that turn complete. Send `关闭 AIAP 自动提案` to stop capture in that session. The allowlist is stored on the device (up to 16 sessions) and applies to future turns. Control messages themselves are excluded from proposals.
 
-The plugin considers one short, direct Owner statement from a completed turn. It validates a one-use binding to the active DSH invocation, session, RPC ID and statement. Core applies its host-observation admission rules and keeps accepted candidates pending. Use the Owner terminal to review those proposals. Core records host-reported provenance; it does not independently authenticate the original DSH prompt. Remove the plugin entry and restart DSH to uninstall capture.
+The plugin considers one short, direct Owner statement from a completed turn. It validates a one-use binding to the active DSH invocation, session, RPC ID and statement. Core applies its host-observation admission rules and keeps accepted candidates pending. Use the Owner terminal to review those proposals. Core records host-reported provenance; it does not independently authenticate the original DSH prompt. To uninstall capture, remove its Cordis entry, run `pnpm remove dsh-aiap-capture` in that profile using its pnpm, and restart DSH.
 
 ### Connecting to an existing Core over HTTP
 
