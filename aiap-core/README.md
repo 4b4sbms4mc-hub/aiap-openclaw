@@ -26,7 +26,7 @@ pytest
 
 ### Fresh DSH installation with a local Core
 
-Download both wheels and `SHA256SUMS-MCP.txt` from [AIAP Memory MCP 0.3.5](https://github.com/4b4sbms4mc-hub/aiap-openclaw/releases/tag/aiap-mcp-v0.3.5). Use Python 3.12 and run the commands from the download directory.
+Download both wheels and `SHA256SUMS-MCP.txt` from [AIAP Memory MCP 0.3.6](https://github.com/4b4sbms4mc-hub/aiap-openclaw/releases/tag/aiap-mcp-v0.3.6). Use Python 3.12 and run the commands from the download directory.
 
 On macOS and Linux:
 
@@ -35,7 +35,7 @@ shasum -a 256 -c SHA256SUMS-MCP.txt
 VENV="$HOME/.local/share/aiap-dsh/venv"
 DATA="$HOME/.local/share/aiap-dsh/core"
 python3.12 -m venv "$VENV"
-"$VENV/bin/python" -m pip install ./aiap_core_service-0.2.1-py3-none-any.whl './aiap_reference-0.3.5-py3-none-any.whl[mcp]'
+"$VENV/bin/python" -m pip install ./aiap_core_service-0.2.2-py3-none-any.whl './aiap_reference-0.3.6-py3-none-any.whl[mcp]'
 "$VENV/bin/python" -m aiap_core --data-dir "$DATA" init
 "$VENV/bin/python" -m aiap_core --data-dir "$DATA" grant --spaces space:general \
   --purpose aiap-memory --runtime deepseek-harness --output "$DATA/adapter.json"
@@ -48,7 +48,7 @@ $Venv = Join-Path $env:LOCALAPPDATA 'AIAP\venv'
 $Data = Join-Path $env:LOCALAPPDATA 'AIAP\core'
 py -3.12 -m venv $Venv
 $Python = Join-Path $Venv 'Scripts\python.exe'
-& $Python -m pip install .\aiap_core_service-0.2.1-py3-none-any.whl '.\aiap_reference-0.3.5-py3-none-any.whl[mcp]'
+& $Python -m pip install .\aiap_core_service-0.2.2-py3-none-any.whl '.\aiap_reference-0.3.6-py3-none-any.whl[mcp]'
 & $Python -m aiap_core --data-dir $Data init
 & $Python -m aiap_core --data-dir $Data grant --spaces space:general --purpose aiap-memory --runtime deepseek-harness --output (Join-Path $Data 'adapter.json')
 ```
@@ -70,7 +70,7 @@ For Owner commands in Windows PowerShell, use `& $Python` as the executable and 
 
 #### macOS system embeddings
 
-On macOS, install the Core wheel with the optional bridge using `"$VENV/bin/python" -m pip install './aiap_core_service-0.2.1-py3-none-any.whl[system-embedding]'`.
+On macOS, install the Core wheel with the optional bridge using `"$VENV/bin/python" -m pip install './aiap_core_service-0.2.2-py3-none-any.whl[system-embedding]'`.
 On macOS 14 or later, add `--system-embedding-language zh-Hans` to the local MCP server arguments, or set `AIAP_SYSTEM_EMBED_LANG=zh-Hans` and `AIAP_EMBED_SPACES=space:general` on a standalone Core server. Use the locale that best matches the indexed space. An explicit HTTP embedding endpoint takes precedence in the standalone server.
 
 Run `aiap embedding status --language zh-Hans` to check whether the system model is available. If Apple reports missing assets, the MCP status and degraded search include the command `aiap embedding download --language zh-Hans`. This command asks macOS to download its own assets. Searches use offline BM25 while the system model is unavailable.
@@ -78,6 +78,54 @@ Run `aiap embedding status --language zh-Hans` to check whether the system model
 The active model and revision identify the vector representation. The backend pools token vectors and normalizes the result locally. All vectors in a query use the configured language and model. Use separate retrieval configurations for separate language groups when needed. System embeddings currently support the macOS runtime. On other platforms, use offline BM25 or the supported HTTP embedding configuration.
 
 To enable hybrid semantic retrieval in local mode, add `--embedding-url http://127.0.0.1:1234 --embedding-model qwen3-embedding-0.6b` to the MCP command arguments, with the origin and model ID from your trusted local OpenAI-compatible embedding server. The server receives the query and approved memory text from the adapter's authorized space. Use `--embedding-dimensions` if the model's vector size differs from 1024. Search results report `retrieval`, `embedding_model` and any `semantic_unavailable` reason. With embeddings disabled or unavailable, Core prioritizes exact substrings and ranks additional matches with SQLite FTS5 BM25 over Chinese character pairs and word tokens. The in-memory index is built from eligible records in the authorized space for the current query. SQLite builds without FTS5 retain exact substring matching.
+
+### Candidate preflight
+
+Before submitting a candidate, call Core `POST /v1/deltas/preflight` with an Adapter or Owner grant that can read and write the selected space. The operator can also pass the same JSON on stdin to `python -m aiap_core --data-dir "$DATA" preflight-candidate --credential-file "$DATA/adapter.json"`.
+
+The request contains `space_ref`, `purpose`, `text`, `level`, `memory_type`, and `trigger` (`user-request`, `host-observation`, or `agent-inference`). Supply `source_ref` for a host observation or to check an earlier submission from the same grant. Set `target_memory_id` to check an intended revision.
+
+Core returns `ready-to-propose`, `duplicate`, `review-revision`, or `insufficient-information` with a reason. Related matches provide memory IDs and revisions for comparison. Shared terms indicate a possible relationship. Source and trigger are caller declarations; `source_verified` is false. This read-only operation has no model calls and creates no proposal. A subsequent submission still requires Owner approval.
+
+Clients can use `POST /v1/deltas/propose-checked` to submit one regular memory change in one space. Send `{"envelope": existing_state_delta_envelope, "trigger": "user-request"}`. Core repeats the same checks and inserts the pending candidate in one SQLite transaction. A response with `submitted: false` carries the preflight decision and adds no proposal. A new entry with related matches needs an explicit revision target or a repeat with `confirm_new: true` to keep the entries separate. The flag records the caller's choice and provides no approval.
+
+The checked endpoint preserves proposal idempotency for identical retries and records the declared trigger for Owner review. Pending proposals from other adapters remain private. The original `/v1/deltas/propose` endpoint remains available to existing clients.
+
+Memory MCP and La Vida's manual proposal tool use checked submission when Core advertises `proposal_admission: checked-v1` in its session. Use `aiap_memory_status` to check the mode. The proposal tool can report duplicates and possible revisions directly, and returns the matching memory IDs and revisions. If the user explicitly asks to keep a related entry separately, pass `confirm_new: true`. Older Core installations use the original pending-proposal flow.
+
+When the session advertises `proposal_revision: true`, the user can choose to correct an existing memory. Pass its ID and revision as `memory_id` and `base_revision`, provide the new text, and set `trigger: user-request` in `aiap_memory_propose`. Core keeps the original level, type and retention settings. It rechecks the target revision on submission and approval. A stale revision returns a 409, so the caller can refresh and show the current record. HTTP adapters may use `POST /v1/deltas/propose-revision` with `space_ref`, `purpose`, `memory_id`, `base_revision`, and `text`.
+
+Owner approval of a checked candidate repeats exact duplicate detection within the approval transaction. If another record now has the same text, level and type in the same space, approval returns `E_DUPLICATE_MEMORY` (409) and the proposal stays pending. The Owner can compare the existing ID and revision in `review --local --changes` and reject the duplicate proposal.
+
+Owner review with `review --local --changes` reports `approval_check` for pending candidates. It shows whether approval would pass the current grant, policy, revision and duplicate checks. The preview is read-only. Core rechecks these conditions when the Owner approves.
+
+Use `pending --credential-file "$DATA/owner-credentials.json" --trigger host-observation` to list pending proposals that report an automatic trigger. Other filters include `user-request`, `agent-inference`, and `legacy` for proposals that have no checked-submission trigger. Trigger filtering combines with `--space` and pagination. Use the Owner review to see the submitting runtime and the reported source reference.
+
+La Vida's opt-in automatic capture uses checked submission with the host-observation trigger when the Core supports it. When an active comparison is needed, the hook reports the existing reference and skips the candidate. Explicit user-requested separation remains available through the manual proposal tool.
+
+### DSH automatic proposals
+
+Automatic proposals use an optional DSH host plugin alongside the Memory MCP. This release supports the audited DSH Desktop 0.2.2-rc.5 SessionController and disables capture on unknown host versions. It leaves the signed DSH application files untouched. The standard Memory MCP remains available independently.
+
+1. Download `dsh-aiap-capture-0.3.6.tar.gz` with the wheels and verify it against `SHA256SUMS-MCP.txt`.
+2. Extract the archive into the DSH profile's `node_modules` directory. For the default Desktop profile, the result is `~/.dsh/profiles/desktop/node_modules/dsh-aiap-capture/index.mjs`.
+3. Use the Core CLI to issue a separate single-space Adapter grant for `space:general`, with `--purpose aiap-auto-capture --runtime deepseek-harness`. Store it in a private file. Only the Adapter credential belongs in the plugin configuration.
+4. Add the following as an additional item in the same profile's `cordis.patch.yml` list and restart DSH. Use absolute paths. Keep the preferences file inside a private directory.
+
+```yaml
+- insert:
+    - id: aiap-capture
+      name: dsh-aiap-capture
+      config:
+        python: /absolute/path/to/venv/bin/python
+        dataDir: /absolute/path/to/core
+        credentialFile: /absolute/path/to/capture-adapter.json
+        preferencesFile: /absolute/private/path/to/capture-sessions.json
+```
+
+Automatic proposals start off in every session. Send the exact message `开启 AIAP 自动提案` as the authenticated Owner in a session and let that turn complete. Send `关闭 AIAP 自动提案` to stop capture in that session. The allowlist is stored on the device (up to 16 sessions) and applies to future turns. Control messages themselves are excluded from proposals.
+
+The plugin considers one short, direct Owner statement from a completed turn. It validates a one-use binding to the active DSH invocation, session, RPC ID and statement. Core applies its host-observation admission rules and keeps accepted candidates pending. Use the Owner terminal to review those proposals. Core records host-reported provenance; it does not independently authenticate the original DSH prompt. Remove the plugin entry and restart DSH to uninstall capture.
 
 ### Connecting to an existing Core over HTTP
 

@@ -106,6 +106,192 @@ class ServiceTests(unittest.TestCase):
         revised, = self.search(include_archived=True)
         self.assertEqual((revised['content'], revised['level']), ('Correction', 'M3'))
 
+    def test_proposal_preflight_is_scoped_read_only_and_reports_candidates(self):
+        identifier = self.add('以后请默认用中文回复。', pinned=True)
+        self.add('仅其他空间可见的内容', token=self.life, space='space:life', pinned=True)
+        payload = {'space_ref': 'space:work', 'purpose': 'work-task', 'text': '以后请默认用中文回复。',
+                   'level': 'M2', 'memory_type': 'preference-evidence', 'trigger': 'user-request'}
+        database_before = self.s.db.read_bytes()
+
+        def preflight(**changes):
+            return self.s.preflight_candidate(self.work, {**payload, **changes})
+
+        duplicate = preflight()
+        self.assertEqual((duplicate['status'], duplicate['reason']), ('duplicate', 'same-active-memory'))
+        self.assertEqual(duplicate['matches'][0]['memory_id'], identifier)
+        self.assertNotIn(payload['text'], json.dumps(duplicate, ensure_ascii=False))
+        revised = preflight(text='以后请默认用英文回复。')
+        self.assertEqual(revised['status'], 'review-revision')
+        self.assertEqual(revised['matches'][0]['revision'], 1)
+        targeted = preflight(text='换一套格式', target_memory_id=identifier)
+        self.assertEqual(targeted['reason'], 'explicit-revision-target')
+        self.assertEqual(preflight(text='仅其他空间可见的内容')['status'], 'ready-to-propose')
+        self.fault('E_DENIED', lambda: preflight(space_ref='space:life'))
+        self.fault('E_DENIED', lambda: preflight(purpose='life-task'))
+        self.assertEqual(preflight(text='我通常用中文写周报', trigger='host-observation')['reason'],
+                         'missing-source-reference')
+        observed = preflight(text='我通常用中文写周报', trigger='host-observation', source_ref='event:example')
+        self.assertEqual(observed['status'], 'ready-to-propose')
+        self.assertFalse(observed['source_verified'])
+        self.assertTrue(observed['requires_owner_confirmation'])
+        self.assertEqual(preflight(text='我今天喜欢中文', trigger='host-observation',
+                                   source_ref='event:example')['reason'], 'unsupported-preference-statement')
+        self.assertEqual(self.s.db.read_bytes(), database_before)
+
+    def test_proposal_preflight_pending_source_is_not_shared_between_adapters(self):
+        draft = self.draft('Fixture pending task', level='M1')
+        source = draft['bindings'][0]['source_refs'][0]
+        pending = self.s.propose(self.work, draft)
+        payload = {'space_ref': 'space:work', 'purpose': 'work-task', 'text': 'Fixture pending task',
+                   'level': 'M1', 'memory_type': 'fact', 'trigger': 'agent-inference', 'source_ref': source}
+        other = self.s.issue_grant(['space:work'], 'work-task', 'another-runtime')['token']
+        retry = self.s.preflight_candidate(self.work, payload)
+        self.assertEqual(retry['reason'], 'same-pending-source')
+        self.assertEqual(retry['delta_id'], pending['delta_id'])
+        self.assertEqual(self.s.preflight_candidate(self.work, {**payload, 'text': 'Changed task'})['reason'],
+                         'source-reference-reused-with-different-candidate')
+        self.assertEqual(self.s.preflight_candidate(other, payload)['status'], 'ready-to-propose')
+
+    def test_checked_submission_serializes_duplicate_proposals_from_same_grant(self):
+        def submit(_):
+            return self.s.propose_checked(self.work, {
+                'trigger': 'agent-inference', 'envelope': self.draft('Concurrent pending proposal', level='M1'),
+            })
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(submit, range(2)))
+        created, = [result for result in results if result['status'] == 'proposed']
+        duplicate, = [result for result in results if result['status'] == 'duplicate']
+        self.assertEqual(duplicate['delta_id'], created['delta_id'])
+        self.assertFalse(duplicate['submitted'])
+        self.assertEqual(len(self.s.pending_proposals(self.owner)['proposals']), 1)
+        self.assertEqual(self.search(), [])
+
+    def test_owner_pending_filters_trigger_before_pagination_and_preserves_scope(self):
+        legacy = self.s.propose(self.work, self.draft('Legacy task'))['delta_id']
+        host = []
+        for text in ('我喜欢用简洁的文字写周报。', '我一般在下午整理资料。'):
+            draft = self.draft(text, pinned=True)
+            result = self.s.propose_checked(self.work, {'trigger': 'host-observation', 'envelope': draft})
+            self.assertEqual(result['status'], 'proposed')
+            host.append(result['delta_id'])
+        self.s.propose_checked(self.life, {'trigger': 'host-observation', 'envelope':
+                             self.draft('我喜欢周末在家看电影。', token=self.life, space='space:life', pinned=True)})
+        work_owner = self.s.issue_grant(['space:work'], 'review', 'fixture-owner', role='owner')['token']
+        before = self.s.db.read_bytes()
+        first = self.s.pending_proposals(work_owner, trigger='host-observation', limit=1)
+        second = self.s.pending_proposals(work_owner, trigger='host-observation', limit=1, after=first['next_after'])
+        self.assertEqual([entry['delta_id'] for entry in first['proposals'] + second['proposals']], sorted(host))
+        self.assertIsNone(second['next_after'])
+        self.assertEqual(self.s.pending_proposals(work_owner, trigger='legacy')['proposals'],
+                         [{'delta_id': legacy, 'space_refs': ['space:work'], 'trigger': 'legacy'}])
+        self.fault('E_DENIED', lambda: self.s.pending_proposals(self.work, trigger='host-observation'))
+        review = self.s.review(work_owner, host[0], changes=True)
+        self.assertEqual(review['changes'][0]['proposal_source']['runtime_ref'], 'test-work')
+        self.assertTrue(review['changes'][0]['proposal_source']['reported_reference'].startswith('evidence:'))
+        self.assertFalse(review['admission']['source_verified'])
+        self.assertEqual(self.s.db.read_bytes(), before)
+
+    def test_owner_approval_preview_reports_revoked_issuer_and_stale_revision(self):
+        ident = self.add('Original decision')
+        old, = self.search()
+        item = self.s.propose(self.work, self.draft('Correction', old=old))
+        delta_id = item['delta_id']
+        before = self.s.db.read_bytes()
+        self.assertEqual(self.s.review(self.owner, delta_id, changes=True)['approval_check'],
+                         {'status': 'ready'})
+        self.assertEqual(self.s.db.read_bytes(), before)
+        self.s.confirm_memory_use(self.owner, 'space:work', ident, old['revision'])
+        stale = self.s.review(self.owner, delta_id, changes=True)
+        self.assertEqual(stale['approval_check'], {'status': 'blocked', 'code': 'E_VERSION_CONFLICT'})
+        self.fault('E_VERSION_CONFLICT', lambda: self.s.decide(self.owner, delta_id, True))
+        grant = self.s.session(self.work)['auth_evidence_ref']
+        self.s.revoke_grant(grant)
+        revoked = self.s.review(self.owner, delta_id, changes=True)
+        self.assertEqual(revoked['approval_check'], {'status': 'blocked', 'code': 'E_IDENTITY'})
+        self.fault('E_IDENTITY', lambda: self.s.decide(self.owner, delta_id, True))
+        self.assertEqual(self.s.review(self.owner, delta_id)['status'], 'proposed')
+
+    def test_checked_approval_blocks_duplicates_across_adapters_without_exposing_pending(self):
+        other = self.s.issue_grant(['space:work'], 'work-task', 'another-runtime')['token']
+        text = 'Shared candidate statement'
+        first = self.s.propose_checked(self.work, {
+            'trigger': 'user-request', 'envelope': self.draft(text),
+        })
+        second = self.s.propose_checked(other, {
+            'trigger': 'user-request', 'envelope': self.draft(text, token=other),
+        })
+        self.assertEqual((first['status'], second['status']), ('proposed', 'proposed'))
+        first_id, second_id = first['delta_id'], second['delta_id']
+        self.fault('E_DENIED', lambda: self.s.review(other, first_id))
+
+        def approve(delta_id):
+            try:
+                return self.s.decide(self.owner, delta_id, True)['status']
+            except Fault as error:
+                self.assertEqual(error.status, 409)
+                return error.code
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(approve, (first_id, second_id)))
+        self.assertCountEqual(outcomes, ['accepted', 'E_DUPLICATE_MEMORY'])
+        active, = self.search()
+        blocked = (first_id, second_id)[outcomes.index('E_DUPLICATE_MEMORY')]
+        review = self.s.review(self.owner, blocked, changes=True)
+        self.assertEqual(review['status'], 'proposed')
+        self.assertEqual(review['approval_check'], {'status': 'blocked', 'code': 'E_DUPLICATE_MEMORY'})
+        self.assertEqual(review['changes'][0]['active_duplicate'],
+                         {'memory_id': active['memory_id'], 'revision': active['revision']})
+        self.assertEqual(self.s.decide(self.owner, blocked, False)['status'], 'rejected')
+
+    def test_checked_revision_cannot_copy_a_different_active_record(self):
+        self.add('Current decision')
+        old, = self.search()
+        revision = self.s.propose_checked(self.work, {
+            'trigger': 'user-request', 'envelope': self.draft('Replacement text', old=old),
+        })
+        self.assertEqual(revision['status'], 'proposed')
+        self.add('Replacement text')
+        self.fault('E_DUPLICATE_MEMORY', lambda: self.s.decide(self.owner, revision['delta_id'], True))
+        self.assertEqual(sorted(item['content'] for item in self.search()),
+                         ['Current decision', 'Replacement text'])
+
+    def test_checked_submission_requires_review_for_related_add_and_records_trigger(self):
+        ident = self.add('以后请默认用中文回复。', pinned=True)
+        envelope = self.draft('以后请默认用英文回复。', pinned=True)
+        body = {'trigger': 'user-request', 'envelope': envelope}
+        stopped = self.s.propose_checked(self.work, body)
+        self.assertEqual(stopped['status'], 'review-revision')
+        self.assertEqual(stopped['matches'][0]['memory_id'], ident)
+        self.assertEqual(self.s.pending_proposals(self.owner)['proposals'], [])
+
+        old, = self.search()
+        revision = {'trigger': 'user-request', 'envelope': self.draft('以后请默认用英文回复。', old=old)}
+        submitted = self.s.propose_checked(self.work, revision)
+        self.assertEqual(submitted['status'], 'proposed')
+        self.assertTrue(self.s.propose_checked(self.work, revision)['idempotent'])
+        self.fault('E_IDEMPOTENCY_CONFLICT', lambda: self.s.propose_checked(
+            self.work, {**revision, 'trigger': 'agent-inference'}))
+        review = self.s.review(self.owner, submitted['delta_id'], changes=True)
+        self.assertEqual(review['admission']['trigger'], 'user-request')
+        self.assertFalse(review['admission']['source_verified'])
+        self.assertEqual(self.search()[0]['content'], old['content'])
+        self.s.decide(self.owner, submitted['delta_id'], True)
+        self.assertEqual(self.search()[0]['content'], '以后请默认用英文回复。')
+
+    def test_checked_submission_flags_ineligible_observation_and_reserved_metadata(self):
+        draft = self.draft('今天临时处理这个项目', level='M1')
+        body = {'trigger': 'host-observation', 'envelope': draft}
+        self.fault('E_CONFIRMATION_REQUIRED', lambda: self.s.propose_checked(
+            self.work, {**body, 'confirm_new': True}))
+        result = self.s.propose_checked(self.work, body)
+        self.assertEqual(result['reason'], 'automatic-preference-only')
+        self.assertFalse(result['submitted'])
+        self.assertEqual(self.s.pending_proposals(self.owner)['proposals'], [])
+        draft['delta']['extensions'] = {'x-aiap-local-memory-admission': {'source_verified': True}}
+        self.fault('E_OPERATION_UNSUPPORTED', lambda: self.s.propose(self.work, draft))
+        self.fault('E_OPERATION_UNSUPPORTED', lambda: self.s.propose_checked(self.work, body))
+
     def test_offline_recall_keeps_underscored_identifiers_distinct(self):
         accepted = self.add('AIAP_ACCEPTED decision')
         self.s.propose(self.work, self.draft('AIAP_PENDING candidate'))

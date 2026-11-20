@@ -242,7 +242,8 @@ def main():
                         require(Service(current / 'core').verify_local_core(signed['avatar_core'], signed['local_enrollment']), 'restored signature invalid')
                         checks['restored_local_signature'] = True
                     marker = 'AIAP_ACCEPTED' if phase == 'fresh' else 'AIAP_RESTORED_NEW'
-                    candidate = invoke('propose', {'text': marker + ': synthetic concise preference.'})
+                    description = 'synthetic concise preference.' if phase == 'fresh' else 'verified project milestone.'
+                    candidate = invoke('propose', {'text': marker + ': ' + description})
                     require(candidate['status'] == 'proposed', 'candidate not pending')
                     require(not invoke('search', {'query': marker})['results'], 'pending recalled')
                     reviewed = client.call('/v1/deltas/review', {'delta_id': candidate['delta_id']})

@@ -1,7 +1,7 @@
 {
-  "tag": "lavida-openclaw-v0.3.6",
-  "name": "La Vida for OpenClaw 0.3.6 — Typed memory proposals",
+  "tag": "lavida-openclaw-v0.3.7",
+  "name": "La Vida for OpenClaw 0.3.7 — Checked memory proposals",
   "prerelease": true,
-  "core_version": "0.2.1",
-  "plugin_version": "0.3.6"
+  "core_version": "0.2.2",
+  "plugin_version": "0.3.7"
 }
