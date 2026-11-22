@@ -94,6 +94,10 @@ class RecoveryTests(unittest.TestCase):
         fields = dict(statement='Review first', condition='Release', runtimes=['test-runtime'])
         pin = service.preview_preference(self.owner, space, **fields)['preview_sha256']
         pref = service.confirm_preference(self.owner, space, pin, **fields)
+        retired = {**fields, 'statement': 'Former preference'}
+        retired_pin = service.preview_preference(self.owner, space, **retired)['preview_sha256']
+        former = service.confirm_preference(self.owner, space, retired_pin, **retired)
+        service.withdraw_preference(self.owner, space, former['preference_id'])
         core = service.core(self.owner)['avatar_core']
         manifest = service.preference_manifest(self.owner, space)
         core['extensions'].append(dict(namespace='x-aiap-local-preference-index', version='1', critical=True))
@@ -109,11 +113,15 @@ class RecoveryTests(unittest.TestCase):
         pin = export_checkpoint(self.current, checkpoint, clock=lambda: self.now)['checkpoint_sha256']
         options = dict(snapshot_dir=backup, checkpoint=checkpoint, expected_sha256=pin)
         report = self.restore(**options)
-        self.assertEqual((report['restored_preference_records'], report['verified_preference_manifests']), (1, 1))
+        self.assertEqual((report['restored_preference_records'], report['verified_preference_manifests']), (2, 1))
         restored = Service(self.target, clock=lambda: self.now)
         token = json.loads((self.target / 'owner-credentials.json').read_text())['token']
         self.assertEqual(restored.preference_manifest(token, space)['sha256'], manifest['sha256'])
+        runtime = restored.issue_grant([space], 'work', 'test-runtime')['token']
+        recalled = restored.recall_preferences(runtime, space, 'Release')['preferences']
+        self.assertEqual([item['preference_id'] for item in recalled], [pref['preference_id']])
         self.target = self.root / 'rejected'
+        self.reject('E_CRITICAL_EXTENSION', **options, publication_guard=lambda: self.fail('guard invoked'))
         self.reject('E_CRITICAL_EXTENSION', **{**options, 'snapshot_dir': self.snapshot})
         with sqlite3.connect(backup / 'core.sqlite3') as db:
             db.execute("INSERT INTO meta VALUES('preference:orphan', '{}')")
