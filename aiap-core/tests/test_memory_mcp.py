@@ -444,6 +444,26 @@ class InstalledLocalMCPTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual([r['excerpt'] for r in page['results']], [query])
                     self.assertEqual([(r['content'], r['level']) for r in results], [(query, 'M1')])
 
+                    service = Service(data)
+                    owner = json.loads((data / 'owner-credentials.json').read_text())['token']
+                    ids = []
+                    for statement in ('Review the plan', 'Check the schedule', 'Prepare rollback'):
+                        fields = dict(statement=statement, condition='Release', runtimes=['deepseek-harness'])
+                        pin = service.preview_preference(owner, 'space:general', **fields)['preview_sha256']
+                        saved = service.confirm_preference(owner, 'space:general', pin, **fields)
+                        ids.append(saved['preference_id'])
+                    recall = [*core_cli, 'recall-preferences', '--credential-file', str(credential),
+                              '--space', 'space:general', '--condition', 'Release', '--limit', '1']
+                    first = json.loads(subprocess.check_output(recall, timeout=15))
+                    middle = await call(session, 'aiap_memory_context',
+                                        {'query': '', 'limit': 1, 'preference_condition': 'Release',
+                                         'preference_after': first['next_after']})
+                    last = json.loads(subprocess.check_output(
+                        [*recall, '--after', middle['next_preference_after']], timeout=15))
+                    records = first['preferences'] + middle['preference_defaults'] + last['preferences']
+                    self.assertEqual([r['preference_id'] for r in records], sorted(ids))
+                    self.assertNotIn('next_after', last)
+
     @unittest.skipUnless(os.name == 'nt', 'Windows ACLs')
     def test_windows_rejects_credential_with_public_acl(self):
         import win32con
