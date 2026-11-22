@@ -1149,6 +1149,7 @@ class Service:
             owner = self._grant(c, token)
             self._allow(owner, [space], 'read', owner=True)
             preview = self._preference_draft(c, owner, space, **fields)
+            self._verify_preference_space(c, owner['avatar'], preview['scope'])
             result = {**preview, 'preview_sha256': digest(preview)}
             if preview.get('replaces'):
                 previous = self._owner_preference(c, owner, space, preview['replaces'])

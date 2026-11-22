@@ -405,6 +405,11 @@ class ServiceTests(unittest.TestCase):
         detail = self.s.compact_core(self.owner, space=space, revision=original['revision'])
         self.assertEqual(detail['manifest']['preference_manifest'], ref)
         self.assertEqual(detail['manifest']['entries'], [])
+        replacement = dict(fields, statement='Replacement', replaces=pref['preference_id'])
+        before = self.s.db.read_bytes()
+        review = self.s.preview_preference(self.owner, space, **replacement)
+        self.assertEqual(review['replacement_review']['previous_status'], 'confirmed')
+        self.assertEqual(self.s.db.read_bytes(), before)
         bundle = self.s.compact_core(self.owner)
         compact = bundle['avatar_core']
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -442,6 +447,7 @@ class ServiceTests(unittest.TestCase):
             c.execute("UPDATE meta SET value=json_set(value, '$.statement','Changed') WHERE key=?", (pref['preference_id'],))
         self.fault('E_INTEGRITY', lambda: self.s.recall_preferences(self.work, space, 'Release'))
         self.fault('E_INTEGRITY', lambda: self.s.compact_core(self.owner))
+        self.fault('E_INTEGRITY', lambda: self.s.preview_preference(self.owner, space, **replacement))
         self.fault('E_INTEGRITY', lambda: self.s.list_preferences(self.owner, space))
         self.fault('E_INTEGRITY', lambda: self.s.search(self.work, dict(space_refs=[space], purpose='work-task',
             query='', preference_condition='Release'), context=True))
