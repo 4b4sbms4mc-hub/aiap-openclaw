@@ -501,6 +501,40 @@ class ServiceTests(unittest.TestCase):
         self.fault('E_INTEGRITY', lambda: self.s.search(self.work, dict(space_refs=[space], purpose='work-task',
             query='', preference_condition='Release'), context=True))
 
+    def test_new_project_in_signed_index_has_atomic_empty_manifest(self):
+        from unittest.mock import patch
+        core = self.s.core(self.owner)['avatar_core']
+        revision = core['revision']
+        core['extensions'].append({'namespace': 'x-aiap-local-preference-index', 'version': '1', 'critical': True})
+        for space in ('space:general', 'space:work', 'space:life'):
+            manifest = self.s.preference_manifest(self.owner, space)
+            core['state_index'].append(dict(id='preference-manifest:' + space, version=1,
+                                            scope=manifest['scope'], sha256=manifest['sha256']))
+        del core['integrity']
+        self.s._sign_core(core, 'x-aiap-local-ed25519-json-v1', b'AIAP-LOCAL-CORE-v1\x00')
+        with self.s.tx() as c:
+            c.execute('UPDATE cores SET body=?', (canonical(core).decode(),))
+        with patch.object(self.s, '_sign_core', side_effect=OSError()), self.assertRaises(OSError):
+            self.s.create_project_space('demo')
+        self.assertEqual(self.s.core(self.owner)['avatar_core'], core)
+        project = self.s.create_project_space('demo')
+        self.assertTrue(project['created'])
+        space = project['space_ref']
+        self.fault('E_DENIED', lambda: self.s.preference_manifest(self.owner, space))
+        token = self.s.issue_grant([space], 'owner-maintenance', 'owner', role='owner')['token']
+        def read():
+            return self.s.preference_manifest(token, space)
+        manifest = read()
+        self.assertTrue(manifest['signed'])
+        self.assertEqual((manifest['core_revision'], manifest['manifest_version'], manifest['record_count']),
+                         (revision + 1, 1, 0))
+        self.assertFalse(self.s.create_project_space('demo')['created'])
+        self.assertEqual(read(), manifest)
+        fields = dict(statement='Check first', condition='Release', runtimes=['test-work'])
+        pin = self.s.preview_preference(token, space, **fields)['preview_sha256']
+        self.s.confirm_preference(token, space, pin, **fields)
+        self.assertEqual(read()['manifest_version'], 2)
+
     def test_preference_baseline_binds_core_spaces_and_unsigned_records(self):
         review = self.s.preview_preference_baseline
         self.fault('E_DENIED', lambda: review(self.work))

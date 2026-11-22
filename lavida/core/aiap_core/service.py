@@ -175,8 +175,19 @@ class Service:
             if row:
                 require(row['kind'] == 'project', 'E_SCOPE', 409)
                 return {'space_ref': space, 'created': False}
+            core, enrollment = self._load_signed_core(connection, avatar)
             connection.execute('INSERT INTO spaces VALUES(?,?,?,?,?)',
                                (avatar, space, 'project', 'policy:project:' + slug, 1))
+            if core['extensions'] != [_BASE_EXTENSION]:
+                refs = self._preference_references(core)
+                subject = {'avatar': avatar, 'subject': core['owner']['owner_ref']}
+                require(space not in refs, 'E_INTEGRITY', 500)
+                scope = self._scope(connection, subject, space)
+                manifest = self._preference_manifest(connection, avatar, scope)
+                require(manifest['record_count'] == 0, 'E_INTEGRITY', 500)
+                core['state_index'].append({'id': _PREFERENCE_REF_PREFIX + space, 'scope': scope,
+                                            'version': 1, 'sha256': manifest['sha256']})
+                self._save_preference_index(connection, core, enrollment['payload']['avatar_public_key'])
             self._audit(connection, avatar, space, 'project-space-created', space, 'local-operator')
             return {'space_ref': space, 'created': True}
 
@@ -1339,6 +1350,9 @@ class Service:
         core, ref, public_key = update
         manifest = self._preference_manifest(c, core['avatar_id'], ref['scope'])
         ref.update(version=ref['version'] + 1, sha256=manifest['sha256'])
+        self._save_preference_index(c, core, public_key)
+
+    def _save_preference_index(self, c, core, public_key):
         del core['integrity']
         core.update(previous_revision=core['revision'], revision=core['revision'] + 1, updated_at=stamp(self.now()))
         self._sign_core(core, 'x-aiap-local-ed25519-json-v1', b'AIAP-LOCAL-CORE-v1\x00',
