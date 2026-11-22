@@ -544,6 +544,32 @@ class ServiceTests(unittest.TestCase):
         self.s.confirm_preference(token, space, pin, **fields)
         self.assertEqual(read()['manifest_version'], 2)
 
+    def test_activate_preference_baseline_requires_current_review_and_full_owner(self):
+        from unittest.mock import patch
+        activate = self.s.activate_preference_baseline
+        initial = self.s.preview_preference_baseline(self.owner)
+        pin = initial['baseline_sha256']
+        partial = self.s.issue_grant(['space:work'], 'owner-maintenance', 'owner', role='owner')['token']
+        self.fault('E_DENIED', lambda: activate(partial, pin))
+        self.fault('E_DENIED', lambda: activate(self.work, pin))
+        self.fault('E_SCHEMA', lambda: activate(self.owner, None))
+        fields = dict(statement='Preflight', condition='Release', runtimes=['test-work'])
+        draft = self.s.preview_preference(self.owner, 'space:work', **fields)
+        self.s.confirm_preference(self.owner, 'space:work', draft['preview_sha256'], **fields)
+        self.fault('E_VERSION_CONFLICT', lambda: activate(self.owner, pin))
+        pin = self.s.preview_preference_baseline(self.owner)['baseline_sha256']
+        with patch.object(self.s, '_sign_core', side_effect=OSError()), self.assertRaises(OSError):
+            activate(self.owner, pin)
+        self.assertEqual(self.s.preview_preference_baseline(self.owner)['baseline_sha256'], pin)
+        report = activate(self.owner, pin)
+        self.assertEqual(report['core_revision'], initial['baseline']['core_revision'] + 1)
+        for manifest in initial['baseline']['spaces']:
+            current = self.s.preference_manifest(self.owner, manifest['scope']['space_ref'])
+            self.assertTrue(current['signed'])
+            self.assertEqual(current['manifest_version'], 1)
+        self.fault('E_CRITICAL_EXTENSION', lambda: activate(self.owner, pin))
+        self.assertEqual(self.s.core(self.owner)['avatar_core']['revision'], report['core_revision'])
+
     def test_preference_baseline_binds_core_spaces_and_unsigned_records(self):
         review = self.s.preview_preference_baseline
         self.fault('E_DENIED', lambda: review(self.work))

@@ -226,6 +226,9 @@ def main():
     baseline = sp.add_parser('preview-preference-baseline', help='Review the unsigned registry across every space as Owner.')
     baseline.add_argument('--credential-file', required=True)
     baseline.add_argument('--expected-sha256', help='Reject the review if the baseline digest has changed.')
+    activation = sp.add_parser('activate-preference-baseline', help='Sign a reviewed local preference baseline as Owner.')
+    activation.add_argument('--credential-file', required=True)
+    activation.add_argument('--expected-sha256', required=True)
     pref_manifest = sp.add_parser('preference-manifest', help='Read a preference digest and its local Core signature status as Owner.')
     pref_manifest.add_argument('--credential-file', required=True)
     pref_manifest.add_argument('--space', required=True)
@@ -397,7 +400,7 @@ def main():
         return
     local=getattr(args,'local',False)
     local_commands = ('list-memories', 'preflight-candidate', 'pending', *procedural_commands, 'capture-session', 'capture-owner-observation', 'context', 'context-ack', 'confirm-use',
-                      'summary', 'project-space', 'set-validity', 'compare-local-checkpoint', 'preference-candidates', 'review-preference-evidence', 'preview-preference', 'confirm-preference', 'withdraw-preference', 'recall-preferences', 'list-preferences', 'preference-history', 'preference-manifest', 'preview-preference-baseline', 'history', 'grants', 'grant-reissue', 'audit',
+                      'summary', 'project-space', 'set-validity', 'compare-local-checkpoint', 'preference-candidates', 'review-preference-evidence', 'preview-preference', 'confirm-preference', 'withdraw-preference', 'recall-preferences', 'list-preferences', 'preference-history', 'preference-manifest', 'preview-preference-baseline', 'activate-preference-baseline', 'history', 'grants', 'grant-reissue', 'audit',
                       'compact-core', 'compact-manifest', 'profile-summary',
                       'profile-summary-select', 'profile-summary-clear', *_LIFECYCLE_COMMANDS)
     s=Service(args.data_dir,enable_semantic=not local and args.command not in local_commands)
@@ -567,6 +570,8 @@ def main():
             result = s.preview_preference(token, args.space, **fields)
     elif args.command == 'preview-preference-baseline':
         result = s.preview_preference_baseline(_read_grant_token(args.credential_file), expected_sha256=args.expected_sha256)
+    elif args.command == 'activate-preference-baseline':
+        result = s.activate_preference_baseline(_read_grant_token(args.credential_file), args.expected_sha256)
     elif args.command == 'preference-manifest':
         result = s.preference_manifest(_read_grant_token(args.credential_file), args.space)
     elif args.command == 'preference-history':

@@ -1307,25 +1307,45 @@ class Service:
             isinstance(expected_sha256, str) and re.fullmatch(r'[0-9a-f]{64}', expected_sha256)))
         with self.tx(read_only=True) as c:
             owner, spaces, core, _ = self._owner_core(c, token)
-            require(core['extensions'] == [_BASE_EXTENSION], 'E_CRITICAL_EXTENSION', 409)
-            require(not any(ref['id'].startswith(_PREFERENCE_REF_PREFIX) for ref in core['state_index']),
-                    'E_VERSION_CONFLICT', 409)
-            manifests = []
-            status_counts = {}
-            for sid in spaces:
-                scope = self._scope(c, owner, sid)
-                manifest = self._preference_manifest(c, owner['avatar'], scope, include_status_counts=True)
-                status_counts[sid] = manifest.pop('status_counts')
-                manifests.append(manifest)
-            stored = c.execute("SELECT count(*) FROM meta WHERE key GLOB 'preference:*'").fetchone()[0]
-            require(stored == sum(m['record_count'] for m in manifests), 'E_INTEGRITY', 500)
-            baseline = {'profile': 'x-aiap-preference-baseline-review-v1', 'avatar_id': owner['avatar'],
-                        'core_revision': core['revision'], 'signed_core_sha256': digest(core), 'spaces': manifests}
-            baseline_sha256 = digest(baseline)
-            if expected_sha256 is not None:
-                require(hmac.compare_digest(baseline_sha256, expected_sha256), 'E_VERSION_CONFLICT', 409)
-            return {'status': 'preview', 'baseline': baseline, 'baseline_sha256': baseline_sha256,
-                    'status_counts_by_space': status_counts}
+            return self._preference_baseline(c, owner, spaces, core, expected_sha256)
+
+    def activate_preference_baseline(self, token, expected_sha256):
+        """Enroll the reviewed local registry in the signed Core index once."""
+        require(isinstance(expected_sha256, str) and re.fullmatch(r'[0-9a-f]{64}', expected_sha256))
+        with self.tx() as c:
+            owner, spaces, core, enrollment = self._owner_core(c, token)
+            self._allow(owner, spaces, 'admin', owner=True)
+            review = self._preference_baseline(c, owner, spaces, core, expected_sha256)
+            core['extensions'].append(_PREFERENCE_EXTENSION)
+            for manifest in review['baseline']['spaces']:
+                scope = manifest['scope']
+                core['state_index'].append({'id': _PREFERENCE_REF_PREFIX + scope['space_ref'],
+                                            'version': 1, 'sha256': manifest['sha256'], 'scope': scope})
+            self._save_preference_index(c, core, enrollment['payload']['avatar_public_key'])
+            self._audit(c, owner['avatar'], None, 'preference-baseline-activated', expected_sha256, owner['id'])
+            return {'status': 'activated', 'baseline_sha256': expected_sha256,
+                    'core_revision': core['revision'], 'space_count': len(spaces)}
+
+    def _preference_baseline(self, c, owner, spaces, core, expected_sha256):
+        require(core['extensions'] == [_BASE_EXTENSION], 'E_CRITICAL_EXTENSION', 409)
+        require(not any(ref['id'].startswith(_PREFERENCE_REF_PREFIX) for ref in core['state_index']),
+                'E_VERSION_CONFLICT', 409)
+        manifests = []
+        status_counts = {}
+        for sid in spaces:
+            scope = self._scope(c, owner, sid)
+            manifest = self._preference_manifest(c, owner['avatar'], scope, include_status_counts=True)
+            status_counts[sid] = manifest.pop('status_counts')
+            manifests.append(manifest)
+        stored = c.execute("SELECT count(*) FROM meta WHERE key GLOB 'preference:*'").fetchone()[0]
+        require(stored == sum(m['record_count'] for m in manifests), 'E_INTEGRITY', 500)
+        baseline = {'profile': 'x-aiap-preference-baseline-review-v1', 'avatar_id': owner['avatar'],
+                    'core_revision': core['revision'], 'signed_core_sha256': digest(core), 'spaces': manifests}
+        baseline_sha256 = digest(baseline)
+        if expected_sha256 is not None:
+            require(hmac.compare_digest(baseline_sha256, expected_sha256), 'E_VERSION_CONFLICT', 409)
+        return {'status': 'preview', 'baseline': baseline, 'baseline_sha256': baseline_sha256,
+                'status_counts_by_space': status_counts}
 
     def preference_manifest(self, token, space):
         """Compute a scoped digest and verify its commitment when the index declares one."""

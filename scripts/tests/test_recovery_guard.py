@@ -98,15 +98,9 @@ class RecoveryTests(unittest.TestCase):
         retired_pin = service.preview_preference(self.owner, space, **retired)['preview_sha256']
         former = service.confirm_preference(self.owner, space, retired_pin, **retired)
         service.withdraw_preference(self.owner, space, former['preference_id'])
-        core = service.core(self.owner)['avatar_core']
         manifest = service.preference_manifest(self.owner, space)
-        core['extensions'].append(dict(namespace='x-aiap-local-preference-index', version='1', critical=True))
-        core['state_index'].append(dict(id='preference-manifest:' + space, scope=manifest['scope'],
-                                        version=1, sha256=manifest['sha256']))
-        del core['integrity']
-        service._sign_core(core, 'x-aiap-local-ed25519-json-v1', b'AIAP-LOCAL-CORE-v1\x00')
-        with service.tx() as db:
-            db.execute('UPDATE cores SET body=?', (canonical(core).decode(),))
+        review = service.preview_preference_baseline(self.owner)
+        service.activate_preference_baseline(self.owner, review['baseline_sha256'])
         backup = self.root / 'indexed-backup'
         shutil.copytree(self.current, backup)
         checkpoint = self.root / 'indexed.json'
@@ -118,7 +112,7 @@ class RecoveryTests(unittest.TestCase):
         backup, checkpoint, pin, manifest, pref = self.indexed_backup()
         options = dict(snapshot_dir=backup, checkpoint=checkpoint, expected_sha256=pin)
         report = self.restore(**options)
-        self.assertEqual((report['restored_preference_records'], report['verified_preference_manifests']), (2, 1))
+        self.assertEqual((report['restored_preference_records'], report['verified_preference_manifests']), (2, 3))
         restored = Service(self.target, clock=lambda: self.now)
         token = json.loads((self.target / 'owner-credentials.json').read_text())['token']
         self.assertEqual(restored.preference_manifest(token, space)['sha256'], manifest['sha256'])
