@@ -1177,12 +1177,13 @@ class Service:
             self._audit(c, owner['avatar'], space, 'preference-confirmed', key, owner['id'])
             return record
 
-    def recall_preferences(self, token, space, condition):
+    def recall_preferences(self, token, space, condition, *, purpose=None, limit=100):
         require(isinstance(condition, str) and condition.strip() and len(condition) <= 2000)
+        require(type(limit) is int and 1 <= limit <= 100)
         with self.tx(read_only=True) as c:
             grant = self._grant(c, token)
-            self._allow(grant, [space], 'read')
-            return self._matching_preferences(c, grant, space, condition, 100)
+            self._allow(grant, [space], 'read', purpose=purpose)
+            return self._matching_preferences(c, grant, space, condition, limit)
 
     def _matching_preferences(self, c, grant, space, condition, limit):
         scope = self._scope(c, grant, space)

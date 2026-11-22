@@ -1215,6 +1215,21 @@ class HTTPTests(ServiceTests):
     def test_http_no_token(self):
         with self.assertRaises(urllib.error.HTTPError) as cm:urllib.request.urlopen(self.base+'/v1/core')
         self.assertEqual(cm.exception.code,401)
+    def test_http_preference_recall_binds_scope_purpose_and_live_grant(self):
+        path = '/v1/preferences/recall'
+        body = dict(space_ref='space:work', purpose='work-task', condition='Release', limit=1)
+        before = self.s.db.read_bytes()
+        self.assertEqual(self.client.call(path, body), {'space_ref': 'space:work', 'preferences': [], 'possibly_more': False})
+        for edits, error in [({'space_ref':'space:life'}, 'E_DENIED'), ({'purpose':'other'}, 'E_DENIED'),
+                             ({'purpose':None}, 'E_SCHEMA'), ({'limit':True}, 'E_SCHEMA'),
+                             ({'runtime':'other'}, 'E_SCHEMA')]:
+            with self.subTest(edits=edits), self.assertRaisesRegex(RuntimeError, error):
+                self.client.call(path, {**body, **edits})
+        self.assertEqual(self.s.db.read_bytes(), before)
+        self.s.revoke_grant(self.s.session(self.work)['auth_evidence_ref'])
+        with self.assertRaisesRegex(RuntimeError, 'E_IDENTITY'):
+            self.client.call(path, body)
+
     def test_http_duplicate_json_rejected(self):
         req=urllib.request.Request(self.base+'/v1/search',data=b'{"query":"a","query":"b"}',headers={'Authorization':'Bearer '+self.work,'Content-Type':'application/json'})
         with self.assertRaises(urllib.error.HTTPError) as cm:urllib.request.urlopen(req)

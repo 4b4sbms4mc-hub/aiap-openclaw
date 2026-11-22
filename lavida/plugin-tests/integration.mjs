@@ -30,6 +30,13 @@ try {
     ok('semantic HTTP results and explicit fallback reach plugin');
   }
   if(process.env.AIAP_TEST_SEMANTIC){console.log('PASS semantic plugin HTTP bridge');} else {
+  const prefPage = await a.search({query:'', preference_condition:' Release '});
+  assert.equal(prefPage.preference_defaults.length,1);
+  assert.equal(prefPage.preference_defaults[0].statement,'Review the plan');
+  assert.equal(prefPage.preference_defaults[0].exception,'Local experiment');
+  assert.equal(prefPage.possibly_more_preferences,false);
+  assert.equal('preference_defaults' in await a.search({query:''}),false);
+  assert.deepEqual((await a.search({query:'',preference_condition:'Other'})).preference_defaults,[]);
   assert.equal((await a.status()).role,'adapter');ok('scoped authentication against actual Core');
   const work=await a.search({query:'CLASS'});
   assert.equal(work.results.length,1);assert.match(work.results[0].content,/BUSINESS/);assert(!JSON.stringify(work).includes('ECONOMY'));

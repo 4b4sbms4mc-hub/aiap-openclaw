@@ -167,6 +167,29 @@ class MemoryAdmissionTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ToolError):
             await self.call('aiap_memory_search', query='')
 
+    async def test_context_applies_only_confirmed_matching_runtime_preferences(self):
+        space = 'space:general'
+        fields = dict(statement='Review the release plan', condition='Release', exception='Local experiment',
+                      runtimes=['fixture', 'openclaw-work'])
+        pin = self.core.preview_preference(self.owner, space, **fields)['preview_sha256']
+        async def context(**args):
+            return await self.call('aiap_memory_context', query='', **args)
+        self.assertEqual((await context(preference_condition='Release'))['preference_defaults'], [])
+        record = self.core.confirm_preference(self.owner, space, pin, **fields)
+        private = {**fields, 'statement': 'Another runtime only', 'runtimes': ['other']}
+        other = self.core.preview_preference(self.owner, space, **private)
+        self.core.confirm_preference(self.owner, space, other['preview_sha256'], **private)
+        page = await context(preference_condition=' Release ')
+        item, = page['preference_defaults']
+        self.assertEqual(item['preference_id'], record['preference_id'])
+        self.assertEqual(item['exception'], 'Local experiment')
+        self.assertNotIn('evidence_refs', item)
+        self.assertEqual(page['items'], [])
+        self.assertNotIn('preference_defaults', await context())
+        self.assertEqual((await context(preference_condition='Other'))['preference_defaults'], [])
+        self.core.withdraw_preference(self.owner, space, record['preference_id'])
+        self.assertEqual((await context(preference_condition='Release'))['preference_defaults'], [])
+
     async def test_report_adoption_is_bound_to_delivered_version(self):
         draft = await self.call('aiap_memory_propose', text='Orchard planted')
         self.core.decide(self.owner, draft['delta_id'], True)

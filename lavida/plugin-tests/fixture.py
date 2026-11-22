@@ -9,6 +9,10 @@ with tempfile.TemporaryDirectory() as tmp:
     for space,text in [('space:work','BUSINESS_CLASS work preference'),('space:life','ECONOMY_CLASS private preference')]:
         q=proposal(s.session(owner['token']),space,text)
         d=s.propose(owner['token'],q);s.decide(owner['token'],d['delta_id'],True)
+    for runtime, statement in [('openclaw-work', 'Review the plan'), ('unlisted', 'Private default')]:
+        fields=dict(statement=statement, condition='Release', exception='Local experiment', runtimes=[runtime])
+        pin=s.preview_preference(owner['token'], 'space:work', **fields)['preview_sha256']
+        s.confirm_preference(owner['token'], 'space:work', pin, **fields)
     for name,space in [('work','space:work'),('life','space:life'),('general','space:general')]:
         c=s.issue_grant([space],'lavida-memory','openclaw-'+name,'adapter',7)
         save_private(p/(name+'.json'),canonical(c))

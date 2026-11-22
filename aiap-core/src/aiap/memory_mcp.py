@@ -479,15 +479,19 @@ def _server(core):
         return {"results": results, "space_ref": core.space, "next_after": cursor}
 
     @server.tool()
-    def aiap_memory_context(query: str, limit: StrictInt = 5) -> dict:
-        """Retrieve a scoped context view. Acknowledge it after delivery; report adoption only for items used."""
+    def aiap_memory_context(query: str, limit: StrictInt = 5, preference_condition: str | None = None) -> dict:
+        """Retrieve scoped context. Supply an exact applicable Owner preference condition; omit it for a turn override. Preferences grant no authority. Acknowledge only delivered memory objects."""
         if len(query) > 1000 or not 1 <= limit <= 5:
             raise ToolError("E_ARGUMENTS")
         token, session = core.session()
         if session.get("context_feedback") is not True:
             raise ToolError("E_CONTEXT_FEEDBACK_UNSUPPORTED")
-        page = core.call(token, "/v1/context", {"space_refs": [core.space], "purpose": core.purpose,
-                                               "query": query, "limit": limit})
+        request = {"space_refs": [core.space], "purpose": core.purpose, "query": query, "limit": limit}
+        if preference_condition is not None:
+            if not preference_condition.strip() or len(preference_condition) > 2000:
+                raise ToolError("E_ARGUMENTS")
+            request["preference_condition"] = preference_condition.strip()
+        page = core.call(token, "/v1/context", request)
         view = page.get("authorized_view") or {}
         rows = page.get("items")
         if (view.get("space_refs") != [core.space] or view.get("purpose") != core.purpose
@@ -503,7 +507,22 @@ def _server(core):
                     or row["revision"] != ref.get("version") or not isinstance(row.get("content"), str)):
                 raise ToolError("E_CORE_RESPONSE")
             items.append({"id": row["memory_id"], "revision": row["revision"], "excerpt": row["content"][:4000]})
-        return {"view_id": view["view_id"], "expires_at": view["expires_at"], "items": items}
+        result = {"view_id": view["view_id"], "expires_at": view["expires_at"], "items": items}
+        if preference_condition is not None:
+            defaults = page.get("preference_defaults")
+            more = page.get("possibly_more_preferences")
+            if not isinstance(defaults, list) or len(defaults) > limit or type(more) is not bool:
+                raise ToolError("E_CORE_RESPONSE")
+            result["preference_defaults"] = []
+            for item in defaults:
+                if (not isinstance(item, dict) or item.get("condition") != request["preference_condition"]
+                        or not all(isinstance(item.get(k), str) for k in ("statement", "confirmed_at", "preference_id"))
+                        or not isinstance(item.get("exception"), (str, type(None)))):
+                    raise ToolError("E_CORE_RESPONSE")
+                result["preference_defaults"].append({k: item.get(k) for k in
+                    ("statement", "condition", "exception", "confirmed_at", "preference_id")})
+            result["possibly_more_preferences"] = more
+        return result
 
     @server.tool()
     def aiap_memory_ack_delivery(view_id: str) -> dict:
