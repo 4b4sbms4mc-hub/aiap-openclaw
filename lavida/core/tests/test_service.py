@@ -517,9 +517,18 @@ class ServiceTests(unittest.TestCase):
         with patch.object(self.s, '_sign_core', side_effect=OSError()), self.assertRaises(OSError):
             self.s.create_project_space('demo')
         self.assertEqual(self.s.core(self.owner)['avatar_core'], core)
-        project = self.s.create_project_space('demo')
-        self.assertTrue(project['created'])
-        space = project['space_ref']
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+        ready = Barrier(2)
+        def create():
+            ready.wait(timeout=5)
+            return self.s.create_project_space('demo')
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            attempts = [pool.submit(create) for _ in range(2)]
+            projects = [attempt.result(timeout=10) for attempt in attempts]
+        self.assertCountEqual([project['created'] for project in projects], [True, False])
+        space = 'space:project:demo'
+        self.assertTrue(all(project['space_ref'] == space for project in projects))
         self.fault('E_DENIED', lambda: self.s.preference_manifest(self.owner, space))
         token = self.s.issue_grant([space], 'owner-maintenance', 'owner', role='owner')['token']
         def read():
