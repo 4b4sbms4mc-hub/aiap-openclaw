@@ -52,3 +52,7 @@ To compare a pinned checkpoint against the local source, use `--data-dir DIR com
 
 
 Run `preview-preference-baseline --credential-file OWNER_FILE` on a legacy local Core to review enrollment inputs. The credential must cover all spaces. The command returns the signed Core digest and revision, each scoped preference digest and count, and the digest of the combined baseline. This read-only review neither establishes the historical authenticity of unsigned preferences nor activates the extension. Production activation remains pending support for the preference registry in the recovery path.
+
+Use `preference-history --credential-file OWNER_FILE --space SPACE --preference-id ID` to read a single preference and its earlier versions, newest selected version first. Each page includes the recorded evidence revisions, confirmation time and lifecycle status. Pass `next_preference_id` as the next starting ID until it is null. The default page size is 20, and `--limit` accepts 1–100. Each page checks the current Owner grant and reads the selected space in one transaction.
+
+Add `--check-evidence` to compare each saved evidence revision with the current eligible M1 in the same space. Results report `current`, `revised`, or `unavailable` and omit observation text. This review is read-only. The Owner decides whether to revise or withdraw the preference.

@@ -191,6 +191,26 @@ class ServiceTests(unittest.TestCase):
         self.s.set_memory_validity(self.owner, space, evidence, 1, expires_at=self.now.isoformat())
         self.fault('E_NOT_FOUND', lambda: confirm(self.owner))
 
+    def test_preference_history_checks_current_evidence_without_changing_recall(self):
+        space = 'space:work'
+        evidence = self.add('A single release', level='M1')
+        fields = dict(statement='Run preflight', condition='Release', runtimes=['test-work'], supporting=[evidence])
+        pin = self.s.preview_preference(self.owner, space, **fields)['preview_sha256']
+        key = self.s.confirm_preference(self.owner, space, pin, **fields)['preference_id']
+        def evidence_state():
+            page = self.s.preference_history(self.owner, space, key, check_evidence=True)
+            return page['preferences'][0]['evidence_status'][0]
+        self.assertEqual(evidence_state()['state'], 'current')
+        old = self.s.memory_for_update(self.work, space, evidence, 1)
+        delta = self.s.propose(self.work, self.draft('Revised release observation', old=old))
+        self.s.decide(self.owner, delta['delta_id'], True)
+        self.assertEqual(evidence_state(), {'memory_id': evidence, 'confirmed_revision': 1,
+                                           'current_revision': 2, 'state': 'revised'})
+        self.assertEqual(self.s.recall_preferences(self.work, space, 'Release')['preferences'][0]['preference_id'], key)
+        self.s.set_memory_validity(self.owner, space, evidence, 2, expires_at=self.now.isoformat())
+        self.assertEqual(evidence_state()['state'], 'unavailable')
+        self.assertIsNone(evidence_state()['current_revision'])
+
     def test_preference_replacement_and_turn_override(self):
         space = 'space:work'
         def confirm(**changes):
@@ -214,6 +234,16 @@ class ServiceTests(unittest.TestCase):
         records = page['preferences'] + second['preferences']
         self.assertEqual({p['status'] for p in records}, {'superseded', 'confirmed'})
         self.s.withdraw_preference(self.owner, space, updated)
+        before = self.s.db.read_bytes()
+        page = self.s.preference_history(self.owner, space, updated, limit=1)
+        self.assertEqual([p['status'] for p in page['preferences']], ['withdrawn'])
+        self.assertEqual(page['next_preference_id'], first)
+        older = self.s.preference_history(self.owner, space, first)
+        self.assertEqual(older['preferences'][0]['successor'], updated)
+        self.assertIsNone(older['next_preference_id'])
+        self.fault('E_DENIED', lambda: self.s.preference_history(self.work, space, updated))
+        self.fault('E_NOT_FOUND', lambda: self.s.preference_history(self.owner, 'space:life', updated))
+        self.assertEqual(self.s.db.read_bytes(), before)
         self.assertEqual(context(), [])
 
     def test_preference_manifest_tracks_archives_and_isolates_spaces(self):

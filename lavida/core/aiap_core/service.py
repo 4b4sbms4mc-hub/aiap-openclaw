@@ -1321,6 +1321,57 @@ class Service:
             count += 1
         return {**header, 'record_count': count, 'sha256': hasher.hexdigest(), 'signed': False}
 
+    def preference_history(self, token, space, preference_id, *, limit=20, check_evidence=False):
+        """Read a bounded chain from the selected revision towards its predecessors."""
+        require(type(limit) is int and 1 <= limit <= 100)
+        require(type(check_evidence) is bool)
+        with self.tx(read_only=True) as c:
+            owner = self._grant(c, token)
+            self._allow(owner, [space], 'read', owner=True)
+            scope = self._scope(c, owner, space)
+            self._verify_preference_space(c, owner['avatar'], scope)
+            now = self.now()
+            records = []
+            seen = set()
+            record = self._owner_preference(c, owner, space, preference_id)
+            while True:
+                require(record['preference_id'] == preference_id and preference_id not in seen,
+                        'E_INTEGRITY', 500)
+                if len(records) == limit:
+                    return {'preferences': records, 'next_preference_id': preference_id}
+                seen.add(preference_id)
+                if check_evidence:
+                    record['evidence_status'] = self._preference_evidence_status(c, owner, space, scope, record, now)
+                records.append(record)
+                preference_id = record.get('replaces')
+                if preference_id is None:
+                    return {'preferences': records, 'next_preference_id': None}
+                predecessor = self._owner_preference(c, owner, space, preference_id)
+                require(predecessor.get('successor') == record['preference_id']
+                        and predecessor['status'] == 'superseded', 'E_INTEGRITY', 500)
+                record = predecessor
+
+    def _preference_evidence_status(self, c, owner, space, scope, preference, now):
+        refs = preference['evidence_refs']
+        if not refs:
+            return []
+        slots = ','.join('?' for _ in refs)
+        rows = c.execute(f'SELECT id, body FROM memories WHERE avatar=? AND space=? AND id IN ({slots})',
+                         (owner['avatar'], space, *(ref['memory_id'] for ref in refs)))
+        versions = {}
+        for row in rows:
+            memory = json.loads(row['body'])
+            if (memory['scope'] == scope and memory['level'] == 'M1'
+                    and self._memory_validity(memory, now) == 'current'):
+                versions[row['id']] = memory['revision']
+        statuses = []
+        for ref in refs:
+            revision = versions.get(ref['memory_id'])
+            state = 'unavailable' if revision is None else 'current' if revision == ref['revision'] else 'revised'
+            statuses.append({'memory_id': ref['memory_id'], 'confirmed_revision': ref['revision'],
+                             'current_revision': revision, 'state': state})
+        return statuses
+
     def list_preferences(self, token, space, *, after='', limit=20):
         require(isinstance(after, str) and (after == '' or re.fullmatch(r'preference:[0-9a-f]{64}', after)))
         require(type(limit) is int and 1 <= limit <= 100)

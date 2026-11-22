@@ -230,6 +230,12 @@ def main():
     pref_list.add_argument('--space', required=True)
     pref_list.add_argument('--after', default='')
     pref_list.add_argument('--limit', type=int, default=20)
+    pref_history = sp.add_parser('preference-history', help='Read earlier versions of one preference as Owner.')
+    pref_history.add_argument('--credential-file', required=True)
+    pref_history.add_argument('--space', required=True)
+    pref_history.add_argument('--preference-id', required=True)
+    pref_history.add_argument('--limit', type=int, default=20)
+    pref_history.add_argument('--check-evidence', action='store_true')
     withdraw = sp.add_parser('withdraw-preference')
     for option in ('credential-file', 'space', 'preference-id'):
         withdraw.add_argument('--' + option, required=True)
@@ -386,7 +392,7 @@ def main():
         return
     local=getattr(args,'local',False)
     local_commands = ('list-memories', 'preflight-candidate', 'pending', *procedural_commands, 'capture-session', 'capture-owner-observation', 'context', 'context-ack', 'confirm-use',
-                      'summary', 'project-space', 'set-validity', 'compare-local-checkpoint', 'preference-candidates', 'review-preference-evidence', 'preview-preference', 'confirm-preference', 'withdraw-preference', 'recall-preferences', 'list-preferences', 'preference-manifest', 'preview-preference-baseline', 'history', 'grants', 'grant-reissue', 'audit',
+                      'summary', 'project-space', 'set-validity', 'compare-local-checkpoint', 'preference-candidates', 'review-preference-evidence', 'preview-preference', 'confirm-preference', 'withdraw-preference', 'recall-preferences', 'list-preferences', 'preference-history', 'preference-manifest', 'preview-preference-baseline', 'history', 'grants', 'grant-reissue', 'audit',
                       'compact-core', 'compact-manifest', 'profile-summary',
                       'profile-summary-select', 'profile-summary-clear', *_LIFECYCLE_COMMANDS)
     s=Service(args.data_dir,enable_semantic=not local and args.command not in local_commands)
@@ -556,6 +562,9 @@ def main():
         result = s.preview_preference_baseline(_read_grant_token(args.credential_file))
     elif args.command == 'preference-manifest':
         result = s.preference_manifest(_read_grant_token(args.credential_file), args.space)
+    elif args.command == 'preference-history':
+        result = s.preference_history(_read_grant_token(args.credential_file), args.space, args.preference_id, limit=args.limit,
+                                      check_evidence=args.check_evidence)
     elif args.command == 'list-preferences':
         result = s.list_preferences(_read_grant_token(args.credential_file), args.space, after=args.after, limit=args.limit)
     elif args.command == 'recall-preferences':
