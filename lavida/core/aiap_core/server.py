@@ -42,10 +42,10 @@ class Handler(BaseHTTPRequestHandler):
                 elif self.path=='/v1/memories/list':result=s.list_memories(token,body)
                 elif self.path=='/v1/preferences/conditions':result=s.preference_conditions(token,body)
                 elif self.path=='/v1/preferences/recall':
-                    exact(body, {'space_ref', 'purpose', 'condition', 'limit'})
+                    exact(body, {'space_ref', 'purpose', 'condition', 'limit'}, ('after',))
                     require(isinstance(body['purpose'], str) and bool(body['purpose']))
                     result=s.recall_preferences(token, body['space_ref'], body['condition'],
-                                                purpose=body['purpose'], limit=body['limit'])
+                                                purpose=body['purpose'], limit=body['limit'], after=body.get('after'))
                 elif self.path=='/v1/context':result=s.search(token,body,context=True)
                 elif self.path=='/v1/context/adopt':result=s.report_adoption(token,body)
                 elif self.path=='/v1/context/ack':result=s.acknowledge(token,body)

@@ -596,6 +596,8 @@ class Service:
                 condition = body.pop('preference_condition')
                 require(isinstance(condition, str) and condition.strip() and len(condition) <= 2000)
                 require(isinstance(body.get('space_refs'), list) and len(body['space_refs']) == 1)
+            after = body.pop('preference_after', None)
+            require(after is None or condition is not None, 'E_CURSOR')
             override = body.pop('skip_preferences', False)
             require(type(override) is bool)
         levels = search_levels(body)
@@ -619,9 +621,11 @@ class Service:
                 if condition is not None:
                     defaults = {'preferences': [], 'possibly_more': False}
                     if not override and 'M2' in levels:
-                        defaults = self._matching_preferences(c, g, scopes[0], condition, limit)
+                        defaults = self._matching_preferences(c, g, scopes[0], condition, limit, token, after)
                     out['preference_defaults'] = defaults['preferences']
                     out['possibly_more_preferences'] = defaults['possibly_more']
+                    if defaults['possibly_more']:
+                        out['next_preference_after'] = defaults['next_after']
                 refs=[{'id':m['memory_id'],'version':m['revision'],'scope':m['scope'],'sha256':digest(m)} for m in result]
                 view={'view_id':uid('view:'),'request_ref':uid('request:'),'avatar_id':g['avatar'],'subject_ref':g['subject'],'session_ref':g['session'],'runtime_ref':g['runtime'],'purpose':g['purpose'],'space_refs':scopes,'objects':refs,'policy_versions':[self._scope(c,g,s)['policy_ref'] for s in scopes],'revocation_epoch':self.meta(c,'revocation_epoch'),'compiled_at':stamp(self.now()),'expires_at':stamp(min(parse(g['expires']),self.now()+timedelta(minutes=5)))}
                 deadlines = [m.get('extensions', {}).get(VALIDITY_EXTENSION, {}).get('expires_at') for m in result]
@@ -1177,13 +1181,13 @@ class Service:
             self._audit(c, owner['avatar'], space, 'preference-confirmed', key, owner['id'])
             return record
 
-    def recall_preferences(self, token, space, condition, *, purpose=None, limit=100):
+    def recall_preferences(self, token, space, condition, *, purpose=None, limit=100, after=None):
         require(isinstance(condition, str) and condition.strip() and len(condition) <= 2000)
         require(type(limit) is int and 1 <= limit <= 100)
         with self.tx(read_only=True) as c:
             grant = self._grant(c, token)
             self._allow(grant, [space], 'read', purpose=purpose)
-            return self._matching_preferences(c, grant, space, condition, limit)
+            return self._matching_preferences(c, grant, space, condition, limit, token, after)
 
     def preference_conditions(self, token, body):
         """List distinct confirmed condition labels visible to this runtime."""
@@ -1207,25 +1211,39 @@ class Service:
             return {'space_ref': space, 'conditions': labels[:20],
                     'next_after': labels[19] if len(labels) > 20 else None}
 
-    def _matching_preferences(self, c, grant, space, condition, limit):
+    def _matching_preferences(self, c, grant, space, condition, limit, token, after):
         scope = self._scope(c, grant, space)
         self._verify_preference_space(c, grant['avatar'], scope)
+        def cursor_tag(key):
+            binding = ['preference-recall-v1', grant['avatar'], grant['id'], grant['runtime'],
+                       grant['purpose'], scope, condition.strip(), key]
+            return hmac.digest(token.encode(), canonical(binding), 'sha256').hex()
+
+        start = ''
+        if after is not None:
+            require(isinstance(after, str) and len(after) <= 160, 'E_CURSOR')
+            tag, _, start = after.partition('.')
+            require(re.fullmatch('[0-9a-f]{64}', tag) and re.fullmatch('preference:[0-9a-f]{64}', start)
+                    and hmac.compare_digest(tag, cursor_tag(start)), 'E_CURSOR')
         rows = c.execute("""
-            SELECT value FROM meta WHERE key GLOB 'preference:*'
+            SELECT value FROM meta WHERE key GLOB 'preference:*' AND key>?
             AND json_extract(value, '$.avatar_id')=? AND json_extract(value, '$.space_ref')=?
-            AND json_extract(value, '$.scope.policy_ref.version')=?
-            AND json_extract(value, '$.scope.policy_ref.id')=?
+            AND json_extract(value, '$.scope')=?
             AND json_extract(value, '$.status')='confirmed' AND json_extract(value, '$.condition')=?
             AND EXISTS (SELECT 1 FROM json_each(meta.value, '$.allowed_runtimes') WHERE value=?)
             ORDER BY key LIMIT ?
-        """, (grant['avatar'], space, scope['policy_ref']['version'], scope['policy_ref']['id'], condition.strip(), grant['runtime'], limit + 1))
+        """, (start, grant['avatar'], space, encode(scope), condition.strip(), grant['runtime'], limit + 1))
         fields = ('preference_id', 'statement', 'condition', 'exception', 'confirmed_at')
         items = []
         for row in rows:
             record = json.loads(row['value'])
             if record['scope'] == scope:
                 items.append({field: record[field] for field in fields})
-        return {'space_ref': space, 'preferences': items[:limit], 'possibly_more': len(items) > limit}
+        page = {'space_ref': space, 'preferences': items[:limit], 'possibly_more': len(items) > limit}
+        if page['possibly_more']:
+            key = items[limit - 1]['preference_id']
+            page['next_after'] = cursor_tag(key) + '.' + key
+        return page
 
     def withdraw_preference(self, token, space, preference_id):
         with self.tx() as c:

@@ -1242,6 +1242,27 @@ class HTTPTests(ServiceTests):
         with self.assertRaisesRegex(RuntimeError, 'E_IDENTITY'):
             self.client.call(path, body)
 
+    def test_http_preference_pages_are_grant_bound(self):
+        space = 'space:work'
+        for text in ['First', 'Second']:
+            fields = dict(statement=text, condition='Release', runtimes=['test-work'])
+            pin = self.s.preview_preference(self.owner, space, **fields)['preview_sha256']
+            self.s.confirm_preference(self.owner, space, pin, **fields)
+        path = '/v1/preferences/recall'
+        req = dict(space_ref=space, purpose='work-task', condition='Release', limit=1)
+        cursor = self.client.call(path, req)['next_after']
+        another = self.s.issue_grant([space], 'work-task', 'test-work')
+        with self.assertRaisesRegex(RuntimeError, 'E_CURSOR'):
+            Client(self.base, another['token']).call(path, {**req, 'after':cursor})
+        view = dict(space_refs=[space], purpose='work-task', query='', limit=1,
+                    preference_condition='Release', preference_after=cursor, skip_preferences=True)
+        skipped = self.client.call('/v1/context', view)
+        self.assertEqual(skipped['preference_defaults'], [])
+        self.assertNotIn('next_preference_after', skipped)
+        self.s.revoke_grant(self.s.session(self.work)['auth_evidence_ref'])
+        with self.assertRaisesRegex(RuntimeError, 'E_IDENTITY'):
+            self.client.call(path, {**req, 'after':cursor})
+
     def test_http_preference_recall_binds_scope_purpose_and_live_grant(self):
         path = '/v1/preferences/recall'
         body = dict(space_ref='space:work', purpose='work-task', condition='Release', limit=1)

@@ -147,8 +147,11 @@ def main():
         credential = core.issue_grant(['space:general'], 'lavida-memory', 'openclaw-main')
         pref_fields = dict(statement='Review two checks', condition='Production changes',
                            exception='Local experiment', runtimes=['openclaw-main'])
-        pref_pin = core.preview_preference(owner_token, 'space:general', **pref_fields)['preview_sha256']
-        pref_id = core.confirm_preference(owner_token, 'space:general', pref_pin, **pref_fields)['preference_id']
+        pref_ids = set()
+        for statement in ('Review two checks', 'Record the rollback plan'):
+            fields = {**pref_fields, 'statement': statement}
+            pin = core.preview_preference(owner_token, 'space:general', **fields)['preview_sha256']
+            pref_ids.add(core.confirm_preference(owner_token, 'space:general', pin, **fields)['preference_id'])
         credential_path = current / 'host/adapter.json'
         credential_path.write_text(json.dumps(credential))
         credential_path.chmod(0o600)
@@ -238,9 +241,15 @@ def main():
                     require(status['automatic_proposals']['enabled'] is False, 'automatic proposals enabled')
                     available = invoke('status', {'preference_conditions_after': ''})['preference_conditions']
                     require(available == {'conditions':['Production changes'], 'next_after':None}, 'wrong condition catalog')
-                    defaults = invoke('search', {'query':'', 'preference_condition':available['conditions'][0]})['preference_defaults']
-                    require(len(defaults) == 1 and defaults[0]['preference_id'] == pref_id
-                            and defaults[0]['exception'] == 'Local experiment', 'wrong preference default')
+                    search = {'query':'', 'preference_condition':available['conditions'][0], 'limit':1}
+                    first = invoke('search', search)
+                    last = invoke('search', {**search, 'preference_after':first['next_preference_after']})
+                    defaults = first['preference_defaults'] + last['preference_defaults']
+                    require(first['possibly_more_preferences'] and not last['possibly_more_preferences']
+                            and 'next_preference_after' not in last and len(defaults) == 2
+                            and {item['preference_id'] for item in defaults} == pref_ids
+                            and all(item['exception'] == 'Local experiment' for item in defaults),
+                            'incomplete preference traversal')
                     require('preference_defaults' not in invoke('search', {'query':''}), 'turn override failed')
                     checks[phase + '_scoped_preference_tools'] = True
                     invoke('status', {}, token='invalid-synthetic-token', expected=401)

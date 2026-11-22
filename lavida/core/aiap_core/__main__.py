@@ -136,6 +136,7 @@ def main():
     context.add_argument('--credential-file', required=True)
     context.add_argument('--space', required=True)
     context.add_argument('--preference-condition')
+    context.add_argument('--preference-after')
     context.add_argument('--skip-preferences', action='store_true')
     _add_recall_options(context)
     context.add_argument('--limit', type=int, default=20)
@@ -220,6 +221,8 @@ def main():
     recall = sp.add_parser('recall-preferences', help='Read confirmed defaults for an exact condition and credential runtime.')
     for option in ('credential-file', 'space', 'condition'):
         recall.add_argument('--' + option, required=True)
+    recall.add_argument('--after')
+    recall.add_argument('--limit', type=int, default=100)
     baseline = sp.add_parser('preview-preference-baseline', help='Review the unsigned registry across every space as Owner.')
     baseline.add_argument('--credential-file', required=True)
     pref_manifest = sp.add_parser('preference-manifest', help='Read a preference digest and its local Core signature status as Owner.')
@@ -511,6 +514,8 @@ def main():
         request = _search_request(args, s.session(token))
         if args.preference_condition is not None:
             request['preference_condition'] = args.preference_condition
+        if args.preference_after is not None:
+            request['preference_after'] = args.preference_after
         request['skip_preferences'] = args.skip_preferences
         result = s.search(token, {**request, 'limit': args.limit}, context=True)
     elif args.command == 'context-ack':
@@ -570,7 +575,7 @@ def main():
         result = s.list_preferences(_read_grant_token(args.credential_file), args.space, after=args.after,
                                     limit=args.limit, needs_review=args.needs_review)
     elif args.command == 'recall-preferences':
-        result = s.recall_preferences(_read_grant_token(args.credential_file), args.space, args.condition)
+        result = s.recall_preferences(_read_grant_token(args.credential_file), args.space, args.condition, limit=args.limit, after=args.after)
     elif args.command == 'withdraw-preference':
         result = s.withdraw_preference(_read_grant_token(args.credential_file), args.space, args.preference_id)
     elif args.command == 'history':

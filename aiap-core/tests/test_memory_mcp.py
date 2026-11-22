@@ -167,6 +167,30 @@ class MemoryAdmissionTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ToolError):
             await self.call('aiap_memory_search', query='')
 
+    async def test_context_pages_preferences_and_rechecks_withdrawals(self):
+        space = 'space:general'
+        keys = []
+        for statement in ('Check the plan', 'Read the changelog', 'Review the risks'):
+            fields = dict(statement=statement, condition='Release', runtimes=['fixture'])
+            pin = self.core.preview_preference(self.owner, space, **fields)['preview_sha256']
+            keys.append(self.core.confirm_preference(self.owner, space, pin, **fields)['preference_id'])
+        keys.sort()
+        async def page(**fields):
+            return await self.call('aiap_memory_context', query='', limit=1, **fields)
+        first = await page(preference_condition='Release')
+        self.assertEqual(first['preference_defaults'][0]['preference_id'], keys[0])
+        cursor = first['next_preference_after']
+        self.core.withdraw_preference(self.owner, space, keys[1])
+        last = await page(preference_condition='Release', preference_after=cursor)
+        self.assertEqual(last['preference_defaults'][0]['preference_id'], keys[2])
+        self.assertFalse(last['possibly_more_preferences'])
+        self.assertNotIn('next_preference_after', last)
+        with self.assertRaises(ToolError):
+            await page(preference_condition='Another', preference_after=cursor)
+        with self.assertRaises(ToolError):
+            await page(preference_after=cursor)
+        self.assertNotIn('preference_defaults', await page())
+
     async def test_context_applies_only_confirmed_matching_runtime_preferences(self):
         space = 'space:general'
         fields = dict(statement='Review the release plan', condition='Release', exception='Local experiment',
