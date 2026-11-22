@@ -167,20 +167,36 @@ class ServiceTests(unittest.TestCase):
         space = 'space:work'
         other = self.s.issue_grant([space], 'work-task', 'second')['token']
         denied = self.s.issue_grant([space], 'work-task', 'unlisted')['token']
-        evidence = self.add('A single release', level='M1')
+        evidence = self.add('Preflight ran before the production change', level='M1')
+        retelling = self.add('The same deployment passed its preflight', token=other, level='M1')
         fields = dict(statement='Run a preflight', condition='Release', exception='Reversible local experiment',
                       runtimes=['test-work', 'second'], supporting=[evidence])
-        pin = self.s.preview_preference(self.owner, space, **fields)['preview_sha256']
+        fields['supporting'].append(retelling)
+        observed = self.s.review_preference_evidence(self.owner, space, [evidence, retelling])
+        self.assertEqual(observed['source_count'], 2)
+        fields['same_event'] = [[group['source_ref'] for group in observed['sources']]]
+        preview = self.s.preview_preference(self.owner, space, **fields)
+        self.assertEqual(preview['event_group_count'], 1)
+        pin = preview['preview_sha256']
         def confirm(token, **edits):
             return self.s.confirm_preference(token, space, pin, **{**fields, **edits})
         def recall(token, condition='Release'):
             return self.s.recall_preferences(token, space, condition)['preferences']
-        self.assertEqual(recall(self.work), [])
+        def context(token, **options):
+            request = dict(space_refs=[space], purpose='work-task', query='', preference_condition='Release')
+            return self.s.search(token, {**request, **options}, context=True)['preference_defaults']
+        self.assertEqual(context(self.work), [])
+        self.assertEqual(context(other), [])
         self.fault('E_DENIED', lambda: confirm(self.work))
         self.fault('E_VERSION_CONFLICT', lambda: confirm(self.owner, statement='Changed'))
         stored = confirm(self.owner)
         self.assertEqual(stored, confirm(self.owner))
-        self.assertEqual(recall(self.work), recall(other))
+        self.assertEqual(context(self.work), context(other))
+        self.assertEqual(context(self.work)[0]['exception'], fields['exception'])
+        self.assertEqual(context(self.work, skip_preferences=True), [])
+        self.assertEqual(context(self.work), context(other))
+        self.assertEqual(context(denied), [])
+        self.fault('E_DENIED', lambda: context(self.life))
         self.assertEqual(recall(self.work)[0]['statement'], fields['statement'])
         self.assertNotIn('evidence_refs', recall(self.work)[0])
         self.assertEqual(recall(denied), [])
@@ -190,7 +206,8 @@ class ServiceTests(unittest.TestCase):
         self.fault('E_DENIED', lambda: self.s.withdraw_preference(self.work, space, key))
         removed = self.s.withdraw_preference(self.owner, space, key)
         self.assertEqual(removed, self.s.withdraw_preference(self.owner, space, key))
-        self.assertEqual(recall(other), [])
+        self.assertEqual(context(self.work), [])
+        self.assertEqual(context(other), [])
         self.fault('E_VERSION_CONFLICT', lambda: confirm(self.owner))
         self.s.set_memory_validity(self.owner, space, evidence, 1, expires_at=self.now.isoformat())
         self.fault('E_NOT_FOUND', lambda: confirm(self.owner))
