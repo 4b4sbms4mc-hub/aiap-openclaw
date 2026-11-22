@@ -4,7 +4,7 @@ from datetime import datetime,timezone,timedelta
 from aiap_core.service import Service
 from aiap_core.client import Client,proposal
 from aiap_core.server import Server
-from aiap_core.contracts import Fault,validate,canonical
+from aiap_core.contracts import Fault,validate,canonical,digest
 
 class ServiceTests(unittest.TestCase):
     def setUp(self):
@@ -273,8 +273,27 @@ class ServiceTests(unittest.TestCase):
             pin = self.s.preview_preference(self.owner, space, **fields)['preview_sha256']
             return self.s.confirm_preference(self.owner, space, pin, **fields)['preference_id']
         first = confirm()
-        updated = confirm(statement='review preflight', replaces=first)
-        self.assertEqual(confirm(statement='review preflight', replaces=first), updated)
+        replacement = dict(statement='review preflight', condition='production', runtimes=['test-work', 'second'],
+                           replaces=first)
+        before = self.s.db.read_bytes()
+        preview = self.s.preview_preference(self.owner, space, **replacement)
+        self.assertEqual(preview.pop('replacement_review'), {
+            'previous_status': 'confirmed',
+            'changes': {
+                'statement': {'before': 'preflight', 'after': 'review preflight'},
+                'allowed_runtimes': {'before': ['test-work'], 'after': ['second', 'test-work']},
+            },
+        })
+        pin = preview.pop('preview_sha256')
+        self.assertEqual(pin, digest(preview))
+        self.assertEqual(self.s.db.read_bytes(), before)
+        record = self.s.confirm_preference(self.owner, space, pin, **replacement)
+        updated = record['preference_id']
+        self.assertNotIn('replacement_review', record)
+        self.assertEqual(self.s.confirm_preference(self.owner, space, pin, **replacement), record)
+        retried = self.s.preview_preference(self.owner, space, **replacement)
+        self.assertEqual(retried['replacement_review']['previous_status'], 'superseded')
+        self.assertEqual(retried['preview_sha256'], pin)
         self.fault('E_VERSION_CONFLICT', lambda: confirm(statement='stale edit', replaces=first))
         def context(**opts):
             request = dict(space_refs=[space], purpose='work-task', query='', preference_condition='production')

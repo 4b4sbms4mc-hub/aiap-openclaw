@@ -1149,7 +1149,16 @@ class Service:
             owner = self._grant(c, token)
             self._allow(owner, [space], 'read', owner=True)
             preview = self._preference_draft(c, owner, space, **fields)
-            return {**preview, 'preview_sha256': digest(preview)}
+            result = {**preview, 'preview_sha256': digest(preview)}
+            if preview.get('replaces'):
+                previous = self._owner_preference(c, owner, space, preview['replaces'])
+                fields_to_compare = ('statement', 'condition', 'exception', 'project_rule', 'allowed_runtimes', 'scope')
+                result['replacement_review'] = {
+                    'previous_status': previous['status'],
+                    'changes': {field: {'before': previous.get(field), 'after': preview[field]}
+                                for field in fields_to_compare if previous.get(field) != preview[field]},
+                }
+            return result
 
     def confirm_preference(self, token, space, preview_sha256, **fields):
         with self.tx() as c:
