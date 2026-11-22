@@ -515,17 +515,31 @@ class ServiceTests(unittest.TestCase):
         fields = dict(statement='Internal example', condition='Release', runtimes=['test-work'])
         space = 'space:work'
         pin = self.s.preview_preference(self.owner, space, **fields)['preview_sha256']
-        self.s.confirm_preference(self.owner, space, pin, **fields)
+        original = self.s.confirm_preference(self.owner, space, pin, **fields)
         second = review(self.owner)
         self.assertNotEqual(second['baseline_sha256'], first['baseline_sha256'])
         self.assertEqual(second['baseline']['core_revision'], first['baseline']['core_revision'])
         self.assertNotIn('Internal example', json.dumps(second))
+        self.assertEqual(second['status_counts_by_space'][space],
+                         {'confirmed': 1, 'superseded': 0, 'withdrawn': 0})
+        self.assertEqual(second['baseline_sha256'], digest(second['baseline']))
         db = self.s.db.read_bytes()
         self.fault('E_VERSION_CONFLICT', lambda: review(self.owner, expected_sha256=first['baseline_sha256']))
         self.assertEqual(review(self.owner, expected_sha256=second['baseline_sha256']), second)
         self.assertEqual(self.s.db.read_bytes(), db)
         self.add('Raise the signed Core revision')
         self.fault('E_VERSION_CONFLICT', lambda: review(self.owner, expected_sha256=second['baseline_sha256']))
+        replacement = dict(fields, statement='Replacement', replaces=original['preference_id'])
+        pin = self.s.preview_preference(self.owner, space, **replacement)['preview_sha256']
+        current = self.s.confirm_preference(self.owner, space, pin, **replacement)
+        self.s.withdraw_preference(self.owner, space, current['preference_id'])
+        reviewed = review(self.owner)
+        self.assertEqual(reviewed['status_counts_by_space'][space],
+                         {'confirmed': 0, 'superseded': 1, 'withdrawn': 1})
+        for manifest in reviewed['baseline']['spaces']:
+            counts = reviewed['status_counts_by_space'][manifest['scope']['space_ref']]
+            self.assertEqual(sum(counts.values()), manifest['record_count'])
+            self.assertNotIn('status_counts', manifest)
         with self.s.tx() as c:
             c.execute("INSERT INTO meta VALUES('preference:orphan','{}')")
         self.fault('E_INTEGRITY', lambda: review(self.owner))

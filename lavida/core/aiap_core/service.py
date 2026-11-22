@@ -1299,8 +1299,13 @@ class Service:
             require(core['extensions'] == [_BASE_EXTENSION], 'E_CRITICAL_EXTENSION', 409)
             require(not any(ref['id'].startswith(_PREFERENCE_REF_PREFIX) for ref in core['state_index']),
                     'E_VERSION_CONFLICT', 409)
-            manifests = [self._preference_manifest(c, owner['avatar'], self._scope(c, owner, sid))
-                         for sid in spaces]
+            manifests = []
+            status_counts = {}
+            for sid in spaces:
+                scope = self._scope(c, owner, sid)
+                manifest = self._preference_manifest(c, owner['avatar'], scope, include_status_counts=True)
+                status_counts[sid] = manifest.pop('status_counts')
+                manifests.append(manifest)
             stored = c.execute("SELECT count(*) FROM meta WHERE key GLOB 'preference:*'").fetchone()[0]
             require(stored == sum(m['record_count'] for m in manifests), 'E_INTEGRITY', 500)
             baseline = {'profile': 'x-aiap-preference-baseline-review-v1', 'avatar_id': owner['avatar'],
@@ -1308,7 +1313,8 @@ class Service:
             baseline_sha256 = digest(baseline)
             if expected_sha256 is not None:
                 require(hmac.compare_digest(baseline_sha256, expected_sha256), 'E_VERSION_CONFLICT', 409)
-            return {'status': 'preview', 'baseline': baseline, 'baseline_sha256': baseline_sha256}
+            return {'status': 'preview', 'baseline': baseline, 'baseline_sha256': baseline_sha256,
+                    'status_counts_by_space': status_counts}
 
     def preference_manifest(self, token, space):
         """Compute a scoped digest and verify its commitment when the index declares one."""
@@ -1373,23 +1379,26 @@ class Service:
         require(ref['sha256'] == manifest['sha256'], 'E_INTEGRITY', 500)
         return {**manifest, 'signed': True, 'core_revision': core['revision'], 'manifest_version': ref['version']}
 
-    def _preference_manifest(self, c, avatar, scope):
+    def _preference_manifest(self, c, avatar, scope, *, include_status_counts=False):
         profile = 'x-aiap-local-preference-manifest-v1'
         header = {'profile': profile, 'avatar_id': avatar, 'scope': scope}
         hasher = hashlib.sha256(canonical(header) + b'\n')
         rows = c.execute("""SELECT key, value FROM meta WHERE key GLOB 'preference:*'
             AND json_extract(value, '$.avatar_id')=? AND json_extract(value, '$.space_ref')=?
             ORDER BY key""", (avatar, scope['space_ref']))
-        count = 0
+        status_counts = dict.fromkeys(('confirmed', 'superseded', 'withdrawn'), 0)
         for row in rows:
             record = json.loads(row['value'])
-            require(record.get('preference_id') == row['key']
-                    and record.get('status') in ('confirmed', 'superseded', 'withdrawn'),
+            status = record.get('status')
+            require(record.get('preference_id') == row['key'] and isinstance(status, str) and status in status_counts,
                     'E_INTEGRITY', 500)
             entry = {'id': row['key'], 'sha256': digest(record)}
             hasher.update(canonical(entry) + b'\n')
-            count += 1
-        return {**header, 'record_count': count, 'sha256': hasher.hexdigest(), 'signed': False}
+            status_counts[status] += 1
+        manifest = {**header, 'record_count': sum(status_counts.values()), 'sha256': hasher.hexdigest(), 'signed': False}
+        if include_status_counts:
+            manifest['status_counts'] = status_counts
+        return manifest
 
     def preference_history(self, token, space, preference_id, *, limit=20, check_evidence=False):
         """Read a bounded chain from the selected revision towards its predecessors."""
