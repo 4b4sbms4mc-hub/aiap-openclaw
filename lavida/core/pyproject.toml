@@ -13,6 +13,7 @@ dependencies = ["jsonschema==4.26.0", "rfc3339-validator==0.1.4", "cryptography>
 system-embedding = ["pyobjc-framework-NaturalLanguage>=10; sys_platform == 'darwin'"]
 
 [tool.setuptools]
+include-package-data = false
 packages = ["aiap_core", "aiap_core.profile"]
 package-dir = {"aiap_core.profile" = "profile"}
 
