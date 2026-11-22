@@ -225,6 +225,7 @@ def main():
     recall.add_argument('--limit', type=int, default=100)
     baseline = sp.add_parser('preview-preference-baseline', help='Review the unsigned registry across every space as Owner.')
     baseline.add_argument('--credential-file', required=True)
+    baseline.add_argument('--expected-sha256', help='Reject the review if the baseline digest has changed.')
     pref_manifest = sp.add_parser('preference-manifest', help='Read a preference digest and its local Core signature status as Owner.')
     pref_manifest.add_argument('--credential-file', required=True)
     pref_manifest.add_argument('--space', required=True)
@@ -565,7 +566,7 @@ def main():
         else:
             result = s.preview_preference(token, args.space, **fields)
     elif args.command == 'preview-preference-baseline':
-        result = s.preview_preference_baseline(_read_grant_token(args.credential_file))
+        result = s.preview_preference_baseline(_read_grant_token(args.credential_file), expected_sha256=args.expected_sha256)
     elif args.command == 'preference-manifest':
         result = s.preference_manifest(_read_grant_token(args.credential_file), args.space)
     elif args.command == 'preference-history':

@@ -508,7 +508,9 @@ class ServiceTests(unittest.TestCase):
         self.fault('E_DENIED', lambda: review(partial))
         first = review(self.owner)
         db = self.s.db.read_bytes()
-        self.assertEqual(review(self.owner), first)
+        self.assertEqual(review(self.owner, expected_sha256=first['baseline_sha256']), first)
+        self.fault('E_SCHEMA', lambda: review(self.owner, expected_sha256='not-a-digest'))
+        self.fault('E_DENIED', lambda: review(partial, expected_sha256=first['baseline_sha256']))
         self.assertEqual(self.s.db.read_bytes(), db)
         fields = dict(statement='Internal example', condition='Release', runtimes=['test-work'])
         space = 'space:work'
@@ -518,6 +520,12 @@ class ServiceTests(unittest.TestCase):
         self.assertNotEqual(second['baseline_sha256'], first['baseline_sha256'])
         self.assertEqual(second['baseline']['core_revision'], first['baseline']['core_revision'])
         self.assertNotIn('Internal example', json.dumps(second))
+        db = self.s.db.read_bytes()
+        self.fault('E_VERSION_CONFLICT', lambda: review(self.owner, expected_sha256=first['baseline_sha256']))
+        self.assertEqual(review(self.owner, expected_sha256=second['baseline_sha256']), second)
+        self.assertEqual(self.s.db.read_bytes(), db)
+        self.add('Raise the signed Core revision')
+        self.fault('E_VERSION_CONFLICT', lambda: review(self.owner, expected_sha256=second['baseline_sha256']))
         with self.s.tx() as c:
             c.execute("INSERT INTO meta VALUES('preference:orphan','{}')")
         self.fault('E_INTEGRITY', lambda: review(self.owner))

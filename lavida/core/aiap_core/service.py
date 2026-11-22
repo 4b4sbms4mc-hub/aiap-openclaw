@@ -1290,8 +1290,10 @@ class Service:
         require(record['avatar_id'] == owner['avatar'] and record['space_ref'] == space, 'E_NOT_FOUND', 404)
         return record
 
-    def preview_preference_baseline(self, token):
-        """Describe exactly which legacy registry state would be enrolled."""
+    def preview_preference_baseline(self, token, *, expected_sha256=None):
+        """Describe the legacy registry state and optionally check a reviewed digest."""
+        require(expected_sha256 is None or (
+            isinstance(expected_sha256, str) and re.fullmatch(r'[0-9a-f]{64}', expected_sha256)))
         with self.tx(read_only=True) as c:
             owner, spaces, core, _ = self._owner_core(c, token)
             require(core['extensions'] == [_BASE_EXTENSION], 'E_CRITICAL_EXTENSION', 409)
@@ -1303,7 +1305,10 @@ class Service:
             require(stored == sum(m['record_count'] for m in manifests), 'E_INTEGRITY', 500)
             baseline = {'profile': 'x-aiap-preference-baseline-review-v1', 'avatar_id': owner['avatar'],
                         'core_revision': core['revision'], 'signed_core_sha256': digest(core), 'spaces': manifests}
-            return {'status': 'preview', 'baseline': baseline, 'baseline_sha256': digest(baseline)}
+            baseline_sha256 = digest(baseline)
+            if expected_sha256 is not None:
+                require(hmac.compare_digest(baseline_sha256, expected_sha256), 'E_VERSION_CONFLICT', 409)
+            return {'status': 'preview', 'baseline': baseline, 'baseline_sha256': baseline_sha256}
 
     def preference_manifest(self, token, space):
         """Compute a scoped digest and verify its commitment when the index declares one."""
