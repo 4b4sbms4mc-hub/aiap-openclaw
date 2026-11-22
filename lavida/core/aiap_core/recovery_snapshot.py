@@ -132,7 +132,9 @@ def restore_snapshot(snapshot_dir, checkpoint, expected_sha256, target_dir, cloc
             revoked = db.execute('SELECT count(*) FROM grants').fetchone()[0]
             db.execute('UPDATE grants SET revoked=1')
             db.execute("UPDATE meta SET value=? WHERE key='revocation_epoch'", (str(payload['revocation_epoch'] + 1),))
-            db.execute('UPDATE cores SET revision=?', (payload['core']['revision'],))
+            checkpoint_core = payload['core']
+            db.execute('UPDATE cores SET revision=?, body=? WHERE avatar=?',
+                       (checkpoint_core['revision'], canonical(checkpoint_core).decode('utf-8'), meta['avatar']))
             recovered._rebuild_core(db, meta['avatar'])
             recovered._audit(db, meta['avatar'], None, 'recovery-checkpoint-applied', expected_sha256, 'local-operator')
         owner = recovered.issue_grant([s['id'] for s in payload['spaces']], 'owner-maintenance', 'owner-local', 'owner', 30)

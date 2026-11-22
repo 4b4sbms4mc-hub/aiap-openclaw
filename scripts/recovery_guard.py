@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sqlite3
 import sys
 from datetime import datetime, timezone, timedelta
 
