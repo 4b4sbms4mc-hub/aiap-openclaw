@@ -103,7 +103,7 @@ class CheckpointReviewTests(unittest.TestCase):
         self.assertFalse(review['source_currentness_verified'])
         self.assertFalse(review['restore_authorized'])
         with self.assertRaises(Fault) as incompatible:
-            registry.review_live(path, lambda *_: self.fail('unexpected source connection'))
+            registry.review_live(path, lambda *_: self.fail('unexpected source connection'), allow_indexed=False)
         self.assertEqual(incompatible.exception.code, 'E_CRITICAL_EXTENSION')
         with self.assertRaises(Fault):
             registry.register(path, '0'*64)
@@ -140,6 +140,36 @@ class CheckpointReviewTests(unittest.TestCase):
         self.assertEqual((index['memory_reference_count'], index['preference_manifest_count']), (memory_count, 1))
         self.assertNotIn(fields['statement'].encode(), output.read_bytes())
         self.assertEqual(source_before, self.fixture.hashes(self.fixture.current))
+        from recovery_avatar_observation import observe_source
+        from aiap_core.recovery_registry import CheckpointRegistry
+        registry = CheckpointRegistry(self.fixture.root/'registry', self.fixture.current, lambda: self.fixture.now)
+        registry.initialize(index['enrollment_sha256'])
+        registry.register(output, result['checkpoint_sha256'])
+        def observe(nonce, pin):
+            return observe_source(self.fixture.current, output, pin, nonce, lambda: self.fixture.now)
+        from source_avatar_observation_rpc import LaboratoryAvatarObservationRPC, PROFILE, verify_reply
+        rpc = LaboratoryAvatarObservationRPC(self.fixture.current, {result['checkpoint_sha256']: output},
+                                              lambda: self.fixture.now)
+        def transport(nonce, pin):
+            request = canonical(dict(profile=PROFILE, op='observe', nonce=nonce, checkpoint_sha256=pin))
+            return verify_reply(rpc.respond(request), request, output, lambda: self.fixture.now)
+        live = registry.review_live(output, transport)
+        self.assertTrue(live['source_currentness_verified'])
+        self.assertFalse(live['restore_authorized'])
+        self.assertEqual(live['preference_manifest_count'], 1)
+        self.assertEqual(source_before, self.fixture.hashes(self.fixture.current))
+        def downgrade(nonce, pin):
+            from cryptography.hazmat.primitives import serialization
+            from aiap_core.contracts import b64
+            from aiap_core.recovery_observation import OBS_DOMAIN, OBS_PROFILE
+            envelope = observe(nonce, pin)
+            body = envelope['payload']
+            body['profile'] = OBS_PROFILE
+            key = serialization.load_pem_private_key((self.fixture.current/'avatar-key.pem').read_bytes(), None)
+            return dict(payload=body, signature=b64(key.sign(OBS_DOMAIN + canonical(body))))
+        with self.assertRaises(Fault) as downgraded:
+            registry.review_live(output, downgrade)
+        self.assertEqual(downgraded.exception.code, 'E_SCHEMA')
         rejected = self.fixture.root/'rejected.json'
         with s.tx() as db:
             db.execute("INSERT INTO meta VALUES('preference:orphan','{}')")
@@ -157,6 +187,9 @@ class CheckpointReviewTests(unittest.TestCase):
         with self.assertRaises(Fault) as modified:
             compare()
         self.assertEqual(modified.exception.code, 'E_INTEGRITY')
+        with self.assertRaises(Fault) as live_mismatch:
+            registry.review_live(output, observe)
+        self.assertEqual(live_mismatch.exception.code, 'E_INTEGRITY')
         with self.assertRaises(Fault) as mismatch:
             issue(rejected)
         self.assertEqual(mismatch.exception.code, 'E_INTEGRITY')

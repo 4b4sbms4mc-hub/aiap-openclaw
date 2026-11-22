@@ -185,20 +185,20 @@ class CheckpointRegistry:
             report, _ = self._review(db, checkpoint_path, index_only=True)
             return report
 
-    def review_live(self, checkpoint_path, observe):
+    def review_live(self, checkpoint_path, observe, *, allow_indexed=True):
         """Validate a fresh point-in-time source observation via a trusted caller's transport.
 
         observe(nonce, checkpoint_sha256) returns the signed Avatar v2 envelope.
         Transport configuration, timeouts and source access belong to the caller.
         This method neither signs a witness proof nor authorizes restoration.
         """
-        with self._verified_source(checkpoint_path, observe) as report:
+        with self._verified_source(checkpoint_path, observe, index_only=allow_indexed) as report:
             return report
 
     @contextmanager
-    def _verified_source(self, checkpoint_path, observe, *, expected=None, reserve_head=False):
+    def _verified_source(self, checkpoint_path, observe, *, expected=None, reserve_head=False, index_only=False):
         with self._transaction() as db:
-            before, _ = self._review(db, checkpoint_path, expected=expected)
+            before, _ = self._review(db, checkpoint_path, expected=expected, index_only=index_only)
         started = self.clock()
         require(started >= _time(before['head']['registered_at']), 'E_RECOVERY_CLOCK_ROLLBACK')
         require(started < _time(before['head']['expires_at']), 'E_EXPIRED')
@@ -208,7 +208,7 @@ class CheckpointRegistry:
         # For publication, prevent other registry writers changing the head after
         # verification and before rename. No registry write or commit is needed.
         with self._transaction(reserve_head=reserve_head) as db:
-            after, payload = self._review(db, checkpoint_path, expected=before)
+            after, payload = self._review(db, checkpoint_path, expected=before, index_only=index_only)
             now = self.clock()
             require(now >= started, 'E_RECOVERY_CLOCK_ROLLBACK')
             verify_observation(envelope, nonce, after['head']['checkpoint_sha256'],

@@ -45,7 +45,7 @@ def restore_isolated(registry, checkpoint, snapshot, snapshot_sha256, target, ob
         info = snapshot.lstat()
         require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid()
                 and not info.st_mode & 0o077, 'E_RECOVERY_FILE')
-        before = registry.review_live(checkpoint, observe)
+        before = registry.review_live(checkpoint, observe, allow_indexed=False)
         _verify_backup(snapshot, snapshot_sha256)
 
         @contextmanager
