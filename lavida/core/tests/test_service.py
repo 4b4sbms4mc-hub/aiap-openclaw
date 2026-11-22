@@ -115,6 +115,10 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual({entry['source_ref'] for entry in saved['evidence_refs']}, set(refs.values()))
         rendered = self.s.recall_preferences(self.work, space, 'Release')['preferences'][0]
         self.assertNotIn('event_groups', rendered)
+        regrouped = preview(replaces=saved['preference_id'])
+        self.assertEqual(regrouped['replacement_review']['changes'],
+                         {'event_groups': {'before': saved['event_groups'], 'after': None}})
+        self.assertNotIn('evidence_changes', regrouped['replacement_review'])
 
     def test_owner_preference_preview_is_scoped_and_read_only(self):
         observation = self.add('Dry run before releases', level='M1')
@@ -264,6 +268,37 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(self.s.list_preferences(self.owner, space, needs_review=True)['preferences'], [])
         item, = self.s.recall_preferences(self.work, space, 'Release')['preferences']
         self.assertEqual(item['preference_id'], current)
+
+    def test_replacement_preview_compares_evidence_references(self):
+        space = 'space:work'
+        revised, removed, kept, added = [self.add(text, level='M1') for text in
+                                         ('Release practice', 'Old example', 'Steady example', 'New example')]
+        fields = dict(statement='Review release plans', condition='Release', runtimes=['test-work'])
+        original = {**fields, 'supporting': [revised, removed, kept]}
+        pin = self.s.preview_preference(self.owner, space, **original)['preview_sha256']
+        saved = self.s.confirm_preference(self.owner, space, pin, **original)
+        old = self.s.memory_for_update(self.work, space, revised, 1)
+        self.s.decide(self.owner, self.s.propose(self.work, self.draft('Revised practice', old=old))['delta_id'], True)
+        replacement = {**fields, 'supporting': [kept, added], 'counterexamples': [revised],
+                       'replaces': saved['preference_id']}
+        before = self.s.db.read_bytes()
+        preview = self.s.preview_preference(self.owner, space, **replacement)
+        changes = preview.pop('replacement_review')['evidence_changes']
+        self.assertEqual([change['memory_id'] for change in changes], sorted([revised, removed, added]))
+        by_id = {change['memory_id']: change for change in changes}
+        self.assertIsNone(by_id[removed]['after'])
+        self.assertIsNone(by_id[added]['before'])
+        self.assertEqual(by_id[revised]['before']['revision'], 1)
+        self.assertEqual(by_id[revised]['before']['roles'], ['supporting'])
+        self.assertEqual(by_id[revised]['after']['revision'], 2)
+        self.assertEqual(by_id[revised]['after']['roles'], ['counterexample'])
+        self.assertEqual(set(by_id[revised]['after']), {'memory_id', 'revision', 'roles', 'source_ref'})
+        pin = preview.pop('preview_sha256')
+        self.assertEqual(pin, digest(preview))
+        self.assertEqual(self.s.db.read_bytes(), before)
+        confirmed = self.s.confirm_preference(self.owner, space, pin, **replacement)
+        self.assertNotIn('replacement_review', confirmed)
+        self.assertIn(by_id[revised]['after'], confirmed['evidence_refs'])
 
     def test_preference_replacement_and_turn_override(self):
         space = 'space:work'

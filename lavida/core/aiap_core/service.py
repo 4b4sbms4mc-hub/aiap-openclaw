@@ -1152,13 +1152,29 @@ class Service:
             result = {**preview, 'preview_sha256': digest(preview)}
             if preview.get('replaces'):
                 previous = self._owner_preference(c, owner, space, preview['replaces'])
-                fields_to_compare = ('statement', 'condition', 'exception', 'project_rule', 'allowed_runtimes', 'scope')
+                fields_to_compare = ('statement', 'condition', 'exception', 'project_rule',
+                                     'allowed_runtimes', 'scope', 'event_groups')
                 result['replacement_review'] = {
                     'previous_status': previous['status'],
-                    'changes': {field: {'before': previous.get(field), 'after': preview[field]}
-                                for field in fields_to_compare if previous.get(field) != preview[field]},
+                    'changes': {field: {'before': previous.get(field), 'after': preview.get(field)}
+                                for field in fields_to_compare if previous.get(field) != preview.get(field)},
                 }
+                before = {ref['memory_id']: ref for ref in previous['evidence_refs']}
+                after = {ref['memory_id']: ref for ref in self._preference_evidence_refs(preview['evidence'])}
+                evidence_changes = [
+                    {'memory_id': memory_id, 'before': before.get(memory_id), 'after': after.get(memory_id)}
+                    for memory_id in sorted(before.keys() | after.keys())
+                    if before.get(memory_id) != after.get(memory_id)
+                ]
+                if evidence_changes:
+                    result['replacement_review']['evidence_changes'] = evidence_changes
             return result
+
+    @staticmethod
+    def _preference_evidence_refs(evidence):
+        return [{'memory_id': item['memory_id'], 'revision': item['revision'],
+                 'roles': item['roles'], 'source_ref': group['source_ref']}
+                for group in evidence['sources'] for item in group['observations']]
 
     def confirm_preference(self, token, space, preview_sha256, **fields):
         with self.tx() as c:
@@ -1180,9 +1196,7 @@ class Service:
                 c.execute('UPDATE meta SET value=? WHERE key=?', (encode(old), old['preference_id']))
                 self._audit(c, owner['avatar'], space, 'preference-superseded', old['preference_id'], owner['id'])
             # Keep references and roles for provenance, without duplicating observation text.
-            references = [{'memory_id': item['memory_id'], 'revision': item['revision'],
-                           'roles': item['roles'], 'source_ref': group['source_ref']}
-                          for group in draft.pop('evidence')['sources'] for item in group['observations']]
+            references = self._preference_evidence_refs(draft.pop('evidence'))
             record = {**draft, 'status': 'confirmed', 'level': 'M2', 'preference_id': key, 'confirmed_at': stamp(self.now()),
                       'evidence_refs': references}
             c.execute('INSERT INTO meta VALUES(?,?)', (key, encode(record)))
