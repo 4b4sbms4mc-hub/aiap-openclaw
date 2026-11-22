@@ -90,6 +90,49 @@ class ServiceTests(unittest.TestCase):
         self.s.set_memory_validity(self.owner, space, ids[0], 1, expires_at=self.now.isoformat())
         self.assertEqual(saved(self.s, self.owner, space), {'space_ref': space, 'status': 'stale'})
 
+    @unittest.skipUnless(hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'geteuid'),
+                         'local procedural descriptors require POSIX file checks')
+    def test_mirror_event_exceptions_are_owner_only_and_leave_workflow_steps_intact(self):
+        from aiap_core.mirror import render, saved
+        from aiap_core.procedural import save_descriptor, resolve_workflow
+        space = 'space:work'
+        source = Path(self.tmp.name) / 'descriptor.json'
+        cap = 'aiap:capability:preflight'
+        workflow = 'aiap:workflow:release'
+        source.write_text(json.dumps(dict(schema_version='0.1', capability_id=cap, name='Preflight',
+            semantic_namespace='release.check', description='Check release inputs', version='1', status='active')))
+        save_descriptor(self.s, 'capability', self.owner, space, source, 0)
+        source.write_text(json.dumps(dict(schema_version='0.1', workflow_id=workflow,
+            owner_avatar_id=self.s.session(self.owner)['avatar_id'], name='Release', intent='Deploy change',
+            steps=[dict(step_id='review', capability_id=cap, parameters={'environment': 'production'})],
+            origin='user_defined', status='validated', version='1')))
+        save_descriptor(self.s, 'workflow', self.owner, space, source, 0)
+        def resolve():
+            return resolve_workflow(self.s, self.owner, space, workflow, 'test-work')
+        before = resolve()
+        refs = []
+        for content, event in [('Reviewed release A', 'a'), ('Retelling A', 'a'), ('Reviewed release B', 'b'),
+                               ('Skipped review for the draft', 'c')]:
+            draft = self.draft(content, level='M1')
+            change = draft['delta']['changes'][0]
+            ref = 'event:' + event
+            change['candidate']['source']['source_ref'] = ref
+            change['evidence'] = [{'source_ref': ref}]
+            draft['bindings'][0]['source_refs'] = [ref]
+            self.s.decide(self.owner, self.s.propose(self.work, draft)['delta_id'], True)
+            refs.append(dict(memory_id=change['candidate']['memory_id'], revision=1))
+        ev = [refs[:2], refs[2:3], refs[3:]]
+        self.fault('E_MIRROR_EVENT_OVERLAP', lambda: render(self.s, self.owner, space, [[r] for r in refs],
+                   lambda _: self.fail('overlapping events sent to generator')))
+        for statement in ('Checks releases; experiments with drafts', 'Reviews production changes first'):
+            result = render(self.s, self.owner, space, ev, lambda _: [
+                dict(statement=statement, support=[1, 2], counterexamples=[3])], save=True)
+            self.assertEqual(len(result['events'][0]['observations']), 2)
+            self.assertEqual(saved(self.s, self.owner, space)['traits'][0]['counterexamples'], [3])
+            self.assertEqual(resolve(), before)
+        saved(self.s, self.owner, space, clear=True)
+        self.assertEqual(resolve(), before)
+
     def test_mirror_clear_during_generation_prevents_late_save(self):
         from aiap_core.mirror import render, saved
         space = 'space:work'
