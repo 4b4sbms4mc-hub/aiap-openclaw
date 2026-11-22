@@ -13,8 +13,9 @@ import tempfile
 from cryptography.hazmat.primitives import serialization
 
 from .contracts import Fault, b64, canonical, digest, require, validate
-from .recovery_checkpoint import PROFILE, load_checkpoint, manifest, read_file, strict_json
-from .service import Service, SQL, parse, save_private
+from .recovery_checkpoint import (PROFILE, _check_registry_coverage, _index_parts, _load_checkpoint,
+                                  read_file, strict_json)
+from .service import Service, SQL, _BASE_EXTENSION, parse, save_private
 
 
 def public_key(pem):
@@ -29,7 +30,12 @@ def schema(db):
 def restore_snapshot(snapshot_dir, checkpoint, expected_sha256, target_dir, clock=None,
                      *, publication_guard=None):
     now = (clock or (lambda: datetime.now(timezone.utc)))()
-    payload, refs = load_checkpoint(checkpoint, expected_sha256, now)
+    payload, refs, preferences = _load_checkpoint(checkpoint, expected_sha256, now,
+                                                  allow_preferences=publication_guard is None)
+    indexed = payload['core']['extensions'] != [_BASE_EXTENSION]
+    if not indexed:
+        require(all(s['id'] in {'space:general', 'space:life', 'space:work'} for s in payload['spaces']),
+                'E_SCOPE')
     snapshot, target = Path(snapshot_dir), Path(target_dir)
     require(not snapshot.is_symlink() and snapshot.is_dir(), 'E_RECOVERY_FILE')
     require(not target.exists() and not target.is_symlink() and target.parent.is_dir(), 'E_OUTPUT_EXISTS')
@@ -59,8 +65,17 @@ def restore_snapshot(snapshot_dir, checkpoint, expected_sha256, target_dir, cloc
         source.execute('BEGIN')
         require(schema(source) == expected_schema, 'E_OPERATION_UNSUPPORTED')
         require(source.execute('PRAGMA integrity_check').fetchone()[0] == 'ok', 'E_INTEGRITY')
-        meta = {k: strict_json(v) for k, v in source.execute('SELECT key,value FROM meta')}
-        require(set(meta) == {'avatar', 'owner', 'enrollment', 'revocation_epoch'}, 'E_OPERATION_UNSUPPORTED')
+        control_keys = {'avatar', 'owner', 'enrollment', 'revocation_epoch'}
+        meta = {}
+        preference_count = 0
+        for key, value in source.execute('SELECT key,value FROM meta'):
+            if key in control_keys:
+                meta[key] = strict_json(value)
+            else:
+                require(indexed and isinstance(key, str) and key.startswith('preference:'), 'E_OPERATION_UNSUPPORTED')
+                strict_json(value)  # Reject ambiguous JSON before computing registry digests.
+                preference_count += 1
+        require(meta.keys() == control_keys, 'E_OPERATION_UNSUPPORTED')
         require(meta['enrollment'] == payload['enrollment'] and meta['avatar'] == payload['core']['avatar_id']
                 and meta['owner'] == enrollment['owner_ref'], 'E_IDENTITY')
         cores = source.execute('SELECT avatar,owner,revision,body FROM cores').fetchall()
@@ -68,7 +83,15 @@ def restore_snapshot(snapshot_dir, checkpoint, expected_sha256, target_dir, cloc
         old_core = strict_json(cores[0][3])
         require(cores[0][2] == old_core['revision'], 'E_INTEGRITY')
         require(Service.verify_local_core(old_core, meta['enrollment']), 'E_INTEGRITY')
-        old_refs = manifest(old_core)
+        require(old_core['extensions'] == payload['core']['extensions'], 'E_CRITICAL_EXTENSION')
+        old_refs, old_preferences = _index_parts(old_core, allow_preferences=indexed)
+        if indexed:
+            # The backup provides whole space registries. A different commitment
+            # cannot be reconstructed from the checkpoint, which carries no rows.
+            require(old_preferences == preferences, 'E_RECOVERY_PREFERENCE_MISMATCH')
+            source.row_factory = sqlite3.Row
+            _check_registry_coverage(Service(snapshot, enable_semantic=False), source, old_core, old_preferences)
+            source.row_factory = None
         require(old_core['revision'] <= payload['core']['revision']
                 and meta['revocation_epoch'] <= payload['revocation_epoch'], 'E_CHECKPOINT_ROLLBACK')
         stored = source.execute('SELECT avatar,id,space,revision,body FROM memories').fetchall()
@@ -149,6 +172,9 @@ def restore_snapshot(snapshot_dir, checkpoint, expected_sha256, target_dir, cloc
                   'restore_guarantee': 'complete-for-current-memory-index' if set(refs) == kept else 'partial-current-memory-index',
                   'trust': 'operator-pinned checkpoint at capture time; no live revocation synchronization',
                   'fresh_owner_credential_file': 'owner-credentials.json'}
+        if indexed:
+            report.update(restored_preference_records=preference_count,
+                          verified_preference_manifests=len(preferences))
         # Nothing can publish until the caller's final gate has entered successfully.
         guard = publication_guard() if publication_guard else nullcontext()
         with guard as evidence:

@@ -87,6 +87,50 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(error.exception.code, code)
         self.assertFalse(self.target.exists())
 
+    def test_offline_signed_preferences_require_matching_registries(self):
+        # Synthetic local stores only. Start both generations at a signed baseline.
+        service = self.service
+        space = 'space:general'
+        fields = dict(statement='Review first', condition='Release', runtimes=['test-runtime'])
+        pin = service.preview_preference(self.owner, space, **fields)['preview_sha256']
+        pref = service.confirm_preference(self.owner, space, pin, **fields)
+        core = service.core(self.owner)['avatar_core']
+        manifest = service.preference_manifest(self.owner, space)
+        core['extensions'].append(dict(namespace='x-aiap-local-preference-index', version='1', critical=True))
+        core['state_index'].append(dict(id='preference-manifest:' + space, scope=manifest['scope'],
+                                        version=1, sha256=manifest['sha256']))
+        del core['integrity']
+        service._sign_core(core, 'x-aiap-local-ed25519-json-v1', b'AIAP-LOCAL-CORE-v1\x00')
+        with service.tx() as db:
+            db.execute('UPDATE cores SET body=?', (canonical(core).decode(),))
+        backup = self.root / 'indexed-backup'
+        shutil.copytree(self.current, backup)
+        checkpoint = self.root / 'indexed.json'
+        pin = export_checkpoint(self.current, checkpoint, clock=lambda: self.now)['checkpoint_sha256']
+        options = dict(snapshot_dir=backup, checkpoint=checkpoint, expected_sha256=pin)
+        report = self.restore(**options)
+        self.assertEqual((report['restored_preference_records'], report['verified_preference_manifests']), (1, 1))
+        restored = Service(self.target, clock=lambda: self.now)
+        token = json.loads((self.target / 'owner-credentials.json').read_text())['token']
+        self.assertEqual(restored.preference_manifest(token, space)['sha256'], manifest['sha256'])
+        self.target = self.root / 'rejected'
+        self.reject('E_CRITICAL_EXTENSION', **{**options, 'snapshot_dir': self.snapshot})
+        with sqlite3.connect(backup / 'core.sqlite3') as db:
+            db.execute("INSERT INTO meta VALUES('preference:orphan', '{}')")
+        self.reject('E_INTEGRITY', **options)
+        with sqlite3.connect(backup / 'core.sqlite3') as db:
+            db.execute("DELETE FROM meta WHERE key='preference:orphan'")
+            original = db.execute('SELECT value FROM meta WHERE key=?', (pref['preference_id'],)).fetchone()[0]
+            db.execute("UPDATE meta SET value=json_set(value,'$.statement','changed') WHERE key=?",
+                       (pref['preference_id'],))
+        self.reject('E_INTEGRITY', **options)
+        with sqlite3.connect(backup / 'core.sqlite3') as db:
+            db.execute('UPDATE meta SET value=? WHERE key=?', (original, pref['preference_id']))
+        service.withdraw_preference(self.owner, space, pref['preference_id'])
+        newer = self.root / 'withdrawn.json'
+        new_pin = export_checkpoint(self.current, newer, clock=lambda: self.now)['checkpoint_sha256']
+        self.reject('E_RECOVERY_PREFERENCE_MISMATCH', snapshot_dir=backup, checkpoint=newer, expected_sha256=new_pin)
+
     def test_current_tombstone_and_manifest_filter_historical_data(self):
         report = self.restore()
         self.assertEqual(report['restored_objects'], 1)
