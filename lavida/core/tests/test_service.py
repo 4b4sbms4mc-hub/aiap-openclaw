@@ -20,6 +20,39 @@ class ServiceTests(unittest.TestCase):
     def fault(self,code,call):
         with self.assertRaises(Fault) as cm:call()
         self.assertEqual(cm.exception.code,code)
+    def test_mirror_owner_selection_is_versioned_and_isolated(self):
+        from aiap_core.mirror import render
+        space = 'space:work'
+        one = self.add('Release preflight', level='M1')
+        two = self.add('Preflight for rollout', level='M1')
+        ev = [[{'memory_id': mid, 'revision': 1}] for mid in [one, two]]
+        traits = [dict(statement='Checks before rollout', support=[1, 2], counterexamples=[])]
+        calls = []
+        def generate(events):
+            calls.append(events)
+            return traits
+        before = self.s.db.read_bytes()
+        self.fault('E_DENIED', lambda: render(self.s, self.work, space, ev, generate))
+        self.assertEqual(render(self.s, self.owner, space, ev[:1], generate)['traits'], [])
+        self.fault('E_NOT_FOUND', lambda: render(self.s, self.owner, 'space:life', ev, generate))
+        self.assertEqual(calls, [])
+        result = render(self.s, self.owner, space, ev, generate)
+        self.assertEqual(result['traits'], traits)
+        weak = {'statement': 'Only once', 'support': [1], 'counterexamples': []}
+        self.assertEqual(render(self.s, self.owner, space, ev, lambda _: [weak])['traits'], [])
+        self.fault('E_VERSION_CONFLICT', lambda: render(self.s, self.owner, space,
+                   [[{'memory_id': one, 'revision': 9}]], generate))
+        self.assertNotIn(one, json.dumps(calls))
+        self.assertEqual(result['events'][1]['observations'][0]['memory_id'], two)
+        self.fault('E_MIRROR_OUTPUT', lambda: render(self.s, self.owner, space, ev,
+                   lambda _: [dict(statement='No second event', support=[1, 1], counterexamples=[])]))
+        self.assertEqual(before, self.s.db.read_bytes())
+        ephemeral = self.s.issue_grant([space], 'mirror', 'owner', role='owner')
+        def revoke(events):
+            self.s.revoke_grant(ephemeral['grant_id'])
+            return traits
+        self.fault('E_IDENTITY', lambda: render(self.s, ephemeral['token'], space, ev, revoke))
+
     def test_preference_evidence_groups_retellings_and_preserves_exceptions(self):
         tokens = [self.work, self.s.issue_grant(['space:work'], 'work-task', 'second-runtime')['token']]
         ids = []
