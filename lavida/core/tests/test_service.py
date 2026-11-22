@@ -300,6 +300,38 @@ class ServiceTests(unittest.TestCase):
         self.assertNotIn('replacement_review', confirmed)
         self.assertIn(by_id[revised]['after'], confirmed['evidence_refs'])
 
+    def test_rejected_replacement_leaves_confirmed_preference_intact(self):
+        space = 'space:work'
+        evidence = self.add('Release check', level='M1')
+        fields = dict(statement='Review release plans', condition='Release', runtimes=['test-work'])
+        pin = self.s.preview_preference(self.owner, space, **fields)['preview_sha256']
+        original = self.s.confirm_preference(self.owner, space, pin, **fields)
+        replacement = {**fields, 'replaces': original['preference_id'], 'supporting': [evidence]}
+        grant = self.s.issue_grant([space], 'review', 'fixture-owner', role='owner')
+        stale = self.s.preview_preference(grant['token'], space, **replacement)['preview_sha256']
+
+        old = self.s.memory_for_update(self.work, space, evidence, 1)
+        self.s.decide(self.owner, self.s.propose(self.work, self.draft('Revised release check', old=old))['delta_id'], True)
+        before = self.s.db.read_bytes()
+        self.fault('E_VERSION_CONFLICT', lambda: self.s.confirm_preference(
+            grant['token'], space, stale, **replacement))
+        self.assertEqual(before, self.s.db.read_bytes())
+
+        fresh = self.s.preview_preference(grant['token'], space, **replacement)['preview_sha256']
+        self.s.revoke_grant(grant['grant_id'])
+        before = self.s.db.read_bytes()
+        self.fault('E_IDENTITY', lambda: self.s.confirm_preference(
+            grant['token'], space, fresh, **replacement))
+        self.assertEqual(before, self.s.db.read_bytes())
+        self.assertEqual(self.s.list_preferences(self.owner, space)['preferences'], [original])
+        recalled, = self.s.recall_preferences(self.work, space, 'Release')['preferences']
+        self.assertEqual(recalled['preference_id'], original['preference_id'])
+
+        confirmed = self.s.confirm_preference(self.owner, space, fresh, **replacement)
+        self.assertEqual(confirmed['evidence_refs'][0]['revision'], 2)
+        history = self.s.preference_history(self.owner, space, confirmed['preference_id'])['preferences']
+        self.assertEqual([record['status'] for record in history], ['confirmed', 'superseded'])
+
     def test_preference_replacement_and_turn_override(self):
         space = 'space:work'
         def confirm(**changes):
