@@ -32,7 +32,7 @@ def main():
     serve.add_argument("--embedding-dimensions", type=int, help="Embedding vector size (default: 1024)")
     serve.add_argument("--credential-file", required=True)
     serve.add_argument("--avatar-id", required=True)
-    serve.add_argument("--space", choices=("space:general", "space:life", "space:work"), required=True)
+    serve.add_argument("--space", help="Exact space in the single-space adapter grant.", required=True)
     serve.add_argument("--purpose", required=True)
     serve.add_argument("--runtime", required=True)
     serve.add_argument("--system-embedding-language", help="Use system embedding for this language in local mode")

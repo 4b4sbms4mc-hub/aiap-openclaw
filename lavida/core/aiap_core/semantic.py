@@ -1,6 +1,7 @@
 """Opt-in scoped embedding retrieval. Wang Lu. No persistent vector index."""
-import json, math, os, time, threading, urllib.request, urllib.parse
+import json, math, os, re, time, threading, urllib.request, urllib.parse
 from collections import OrderedDict
+from . import lexical
 from .contracts import Fault, require, digest, search_levels
 
 class ProviderUnavailable(Exception):
@@ -12,47 +13,81 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 class VectorRanker:
     def __init__(self, scopes):
-        require(scopes and set(scopes) <= {'space:general', 'space:life', 'space:work'}, 'E_EMBED_CONFIG')
+        require(isinstance(scopes, (tuple, list, set, frozenset)) and scopes and all(
+            isinstance(scope, str) and (scope in ('space:general', 'space:life', 'space:work')
+            or re.fullmatch(r'space:project:[a-z0-9][a-z0-9-]{0,62}', scope)) for scope in scopes
+        ), 'E_EMBED_CONFIG')
         self.scopes = set(scopes)
         self.cache = OrderedDict()
         self.lock = threading.Lock()
         self.slots = threading.BoundedSemaphore(2)
 
-    def rank(self,query,records,namespace,guard):
-        if len(records)>200 or any(len(m['content'])>16000 for m in records):raise ProviderUnavailable('E_EMBED_LIMIT')
-        if not self.slots.acquire(blocking=False):raise ProviderUnavailable('E_EMBED_BUSY')
+    def rank(self, query, records, namespace, guard, depth):
+        if any(len(m['content']) > 16000 for m in records):
+            raise ProviderUnavailable('E_EMBED_LIMIT')
+        if not self.slots.acquire(blocking=False):
+            raise ProviderUnavailable('E_EMBED_BUSY')
         try:
-            deadline=time.monotonic()+100
-            keys=[(namespace,self.provider,self.model_key,self.model,self.dimensions,m['memory_id'],m['revision'],digest(m)) for m in records]
-            vectors={}; missing=[]
+            deadline = time.monotonic() + 100
+            prefix = (namespace, self.provider, self.model_key, self.model, self.dimensions)
             with self.lock:
-                for k in list(self.cache):
-                    if self.cache[k][0]<time.monotonic():del self.cache[k]
-                for i,k in enumerate(keys):
-                    if k in self.cache:
-                        vectors[i]=self.cache[k][1]; self.cache.move_to_end(k)
-                    else:missing.append(i)
+                for key in list(self.cache):
+                    if self.cache[key][0] < time.monotonic():
+                        del self.cache[key]
             prompt = query
             if self.provider == 'ollama' or (self.provider == 'openai' and 'qwen3-embedding' in self.model.lower()):
-                prompt='Instruct: Retrieve personal memories relevant to the question.\nQuery:'+query
-            guard()
-            qv=self.embed([prompt],deadline)[0]
-            for start in range(0,len(missing),8):
-                indices=missing[start:start+8]
-                guard()
-                batch=self.embed([records[i]['content'] for i in indices],deadline)
-                guard()
+                prompt = 'Instruct: Retrieve personal memories relevant to the question.\nQuery:' + query
+            guard([])
+            query_vector = self.embed([prompt], deadline)[0]
+            ranked = []
+            for start in range(0, len(records), 8):
+                batch = records[start:start + 8]
+                keys = [(*prefix, m['memory_id'], m['revision'], digest(m)) for m in batch]
+                vectors = {}
                 with self.lock:
-                    for i,v in zip(indices,batch):
-                        vectors[i]=v; self.cache[keys[i]]=(time.monotonic()+300,v)
-                    while len(self.cache)>2048:self.cache.popitem(last=False)
-            ranked=[]
-            for i,m in enumerate(records):
-                score=sum(a*b for a,b in zip(qv,vectors[i])); literal=query.casefold() in m['content'].casefold()
-                if literal or score>=0.5:ranked.append((literal,score,m))
-            ranked.sort(key=lambda x:(-int(x[0]),-x[1],x[2]['memory_id']))
-            return [m for _,_,m in ranked]
-        finally:self.slots.release()
+                    for key in keys:
+                        if key in self.cache:
+                            vectors[key] = self.cache[key][1]
+                            self.cache.move_to_end(key)
+                missing = [(key, m) for key, m in zip(keys, batch) if key not in vectors]
+                if missing:
+                    outbound = [m for _, m in missing]
+                    guard(outbound)
+                    embedded = self.embed([m['content'] for m in outbound], deadline)
+                    guard(outbound)
+                    with self.lock:
+                        for (key, _), vector in zip(missing, embedded):
+                            self.cache[key] = (time.monotonic() + 300, vector)
+                            vectors[key] = vector
+                        while len(self.cache) > 2048:
+                            self.cache.popitem(last=False)
+                for key, record in zip(keys, batch):
+                    score = sum(a*b for a, b in zip(query_vector, vectors[key]))
+                    if score >= 0.5:
+                        ranked.append((score, record))
+                if len(ranked) > depth:
+                    ranked.sort(key=lambda pair: (-pair[0], pair[1]['memory_id']))
+                    del ranked[depth:]
+            ranked.sort(key=lambda pair: (-pair[0], pair[1]['memory_id']))
+            return [record for _, record in ranked]
+        finally:
+            self.slots.release()
+
+
+def fuse(records, query, semantic, depth, *, match_ranks=None):
+    words, _, lexical_method = lexical.rank(records, query, depth)
+    scores, candidates = {}, {}
+    for channel, ranking in (('semantic', semantic[:depth]), ('lexical', words)):
+        for position, record in enumerate(ranking, 1):
+            ident = record['memory_id']
+            if match_ranks is not None:
+                match_ranks.setdefault(ident, {})[channel] = position
+            scores[ident] = scores.get(ident, 0) + 1 / (60 + position)
+            candidates[ident] = record
+    needle = query.casefold()
+    return sorted(candidates.values(), key=lambda m: (
+        needle not in m['content'].casefold(), -scores[m['memory_id']], m['memory_id'])), lexical_method
+
 
 class Semantic(VectorRanker):
     def __init__(self, endpoint, scopes, model='qwen3-embedding:0.6b', dimensions=1024, *, provider='ollama'):
@@ -112,41 +147,81 @@ class Semantic(VectorRanker):
         except ProviderUnavailable:raise
         except Exception:raise ProviderUnavailable('E_EMBED_UNAVAILABLE') from None
 
-def semantic_search(service,token,body):
+def semantic_search(service,token,body, *, preference_evidence=False):
     """Authorize before embedding; recheck grant, epoch and full scoped snapshot after I/O."""
     levels = search_levels(body)
     limit = body.get('limit', 20)
     scopes=body['space_refs']
-    def snapshot():
-        with service.tx() as c:
-            g=service._grant(c,token);service._allow(g,scopes,'read',body['purpose'])
+    def snapshot(batch=None):
+        with service.tx(read_only=True) as c:
+            g=service._grant(c,token);service._allow(g,scopes,'read',body['purpose'],owner=preference_evidence)
             policies=[service._scope(c,g,s) for s in scopes]
             epoch=service.meta(c,'revocation_epoch')
-            rows=c.execute('SELECT body FROM memories WHERE avatar=? AND space IN ('+','.join('?' for _ in scopes)+') ORDER BY id',(g['avatar'],*scopes))
+            sql = 'SELECT body FROM memories WHERE avatar=? AND space IN (' + ','.join('?' for _ in scopes) + ')'
+            if preference_evidence:
+                sql += """ AND json_extract(body, '$.type')='preference-evidence'
+                    AND json_extract(body, '$.level')='M1'
+                    AND json_extract(body, '$.source.source_type') IN ('observed','explicit-user')"""
+            params = [g['avatar'], *scopes]
+            if batch is not None:
+                ids = [m['memory_id'] for m in batch]
+                sql += ' AND id IN (' + (','.join('?' for _ in ids) or 'NULL') + ')'
+                params.extend(ids)
+            rows = c.execute(sql + ' ORDER BY id', params)
             records=[]
             for row in rows:
                 m=json.loads(row[0])
-                if m['status']=='active' and m['level'] in levels and m['scope'] in policies:records.append(m)
+                if service.current_memory(m) and m['level'] in levels and m['scope'] in policies:records.append(m)
             namespace=(g['avatar'],g['subject'],g['id'],g['purpose'],g['runtime'],epoch,digest(policies))
             return namespace,records
     namespace,records=snapshot()
     engine=service.semantic
-    if not body['query'].strip() or not records or not set(scopes)<=engine.scopes:
-        result=service._literal_search(token,body)
-        result['semantic_enabled']=set(scopes)<=engine.scopes
-        if not set(scopes)<=engine.scopes:result['semantic_unavailable']='E_EMBED_SCOPE_NOT_ENABLED'
+    def literal_result():
+        if not preference_evidence:
+            return service._literal_search(token, body)
+        ranked, more, method = lexical.rank(records, body['query'], limit)
+        latest_namespace, latest = snapshot()
+        require(namespace == latest_namespace and digest(records) == digest(latest), 'E_SEARCH_STATE_CHANGED', 409)
+        ranked = [dict(record, match_ranks={'lexical': i}) for i, record in enumerate(ranked, 1)]
+        return {'items': ranked, 'count': len(ranked), 'possibly_more': more,
+                'retrieval': method, 'space_refs': scopes}
+
+    enabled = engine is not None and set(scopes) <= engine.scopes
+    if not body['query'].strip() or not records or not enabled:
+        result = literal_result()
+        result['semantic_enabled'] = enabled
+        result['degraded'] = False
+        if engine is None:
+            result['retrieval_reason'] = 'embedding-not-configured'
+        elif not result['semantic_enabled']:
+            result['semantic_unavailable'] = 'E_EMBED_SCOPE_NOT_ENABLED'
+            result['retrieval_reason'] = 'scope-not-enabled'
+        elif not body['query'].strip():
+            result['retrieval_reason'] = 'empty-query'
+        else:
+            result['retrieval_reason'] = 'no-eligible-records'
         return result
     signature=digest(records)
-    def guard():
-        current,objects=snapshot()
-        require(current==namespace and digest(objects)==signature,'E_SEARCH_STATE_CHANGED',409)
+    def guard(batch=None):
+        require(service.semantic is engine and set(scopes) <= engine.scopes, 'E_SEARCH_STATE_CHANGED', 409)
+        current,objects=snapshot(batch)
+        expected = signature if batch is None else digest(batch)
+        require(current==namespace and digest(objects)==expected,'E_SEARCH_STATE_CHANGED',409)
     try:
-        ranked=engine.rank(body['query'],records,namespace,guard)
+        depth = max(60, limit + 1)
+        semantic = engine.rank(body['query'], records, namespace, guard, depth)
+        match_ranks = {} if preference_evidence else None
+        ranked, lexical_method = fuse(records, body['query'], semantic, depth, match_ranks=match_ranks)
     except ProviderUnavailable as e:
-        result=service._literal_search(token,body)
-        result.update(semantic_enabled=True,degraded=True,semantic_unavailable=str(e))
+        require(service.semantic is engine and set(scopes) <= engine.scopes, 'E_SEARCH_STATE_CHANGED', 409)
+        result=literal_result()
+        result.update(semantic_enabled=True,degraded=True,retrieval_reason="embedding-unavailable",semantic_unavailable=str(e))
         if setup := getattr(engine, 'setup', None):
             result['embedding_setup'] = setup()
         return result
     guard()
-    return {'items':ranked[:limit],'count':min(limit,len(ranked)),'possibly_more':len(ranked)>limit,'retrieval':'scoped-hybrid-cosine','space_refs':scopes,'semantic_enabled':True,'degraded':False,'embedding_model':engine.model}
+    items = ranked[:limit]
+    if preference_evidence:
+        items = [dict(record, match_ranks=match_ranks[record['memory_id']]) for record in items]
+    return {'items':items,'count':len(items),'possibly_more':len(ranked)>limit,'retrieval':'scoped-hybrid-cosine','retrieval_reason':'hybrid-ranked','space_refs':scopes,'semantic_enabled':True,'degraded':False,'embedding_model':engine.model,
+            'fusion':'reciprocal-rank','lexical_retrieval':lexical_method}

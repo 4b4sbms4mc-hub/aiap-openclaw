@@ -16,28 +16,35 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lavida/core'))
 from aiap_core.service import Service, SQL, stamp, parse, uid, save_private
 from aiap_core.contracts import canonical, digest, b64, unb64, require, exact, validate, Fault
 from cryptography.hazmat.primitives import serialization
-from aiap_core.recovery_checkpoint import (DOMAIN, PROFILE, expected_scope, load_checkpoint,
-                                          manifest, read_file, strict_json, validate_payload)
+from aiap_core.recovery_checkpoint import (DOMAIN, PROFILE, expected_scope, inspect_checkpoint_index, load_checkpoint,
+                                          manifest, read_file, strict_json, validate_issuance_source, validate_payload)
 from aiap_core.recovery_snapshot import public_key, restore_snapshot, schema
 
 def export_checkpoint(data_dir, output, ttl_hours=1, clock=None):
     require(type(ttl_hours) is int and 1 <= ttl_hours <= 24, 'E_SCHEMA')
     now = (clock or (lambda: datetime.now(timezone.utc)))()
     service = Service(data_dir, clock=lambda: now)
-    with service.tx() as db:
-        core = strict_json(db.execute('SELECT body FROM cores WHERE avatar=?',
-                                     (service.meta(db, 'avatar'),)).fetchone()[0])
+    with service.tx(read_only=True) as db:
+        avatar = service.meta(db, 'avatar')
+        row = db.execute('SELECT body,revision FROM cores WHERE avatar=?', (avatar,)).fetchone()
+        require(row is not None, 'E_INTEGRITY')
+        core = strict_json(row['body'])
+        require(core['avatar_id'] == avatar and core['revision'] == row['revision'], 'E_INTEGRITY')
         payload = {'profile': PROFILE, 'checkpoint_id': uid('recovery:'), 'issued_at': stamp(now),
                    'expires_at': stamp(now + timedelta(hours=ttl_hours)), 'core': core,
                    'enrollment': service.meta(db, 'enrollment'),
                    'spaces': [dict(r) for r in db.execute('SELECT * FROM spaces ORDER BY id')],
                    'tombstones': [dict(r) for r in db.execute('SELECT * FROM tombstones ORDER BY id')],
                    'revocation_epoch': service.meta(db, 'revocation_epoch')}
-        refs = validate_payload(payload, now)
-        rows = {r['id']: r for r in db.execute('SELECT * FROM memories')}
-        require(set(rows) == set(refs), 'E_INTEGRITY')
-        for ident, row in rows.items():
-            require(digest(strict_json(row['body'])) == refs[ident]['sha256'], 'E_INTEGRITY')
+        refs = validate_issuance_source(service, db, payload, now)
+        checked = 0
+        for row in db.execute('SELECT * FROM memories'):
+            ref = refs.get(row['id'])
+            require(ref is not None and row['avatar'] == avatar and row['revision'] == ref['version']
+                    and row['space'] == ref['scope']['space_ref']
+                    and digest(strict_json(row['body'])) == ref['sha256'], 'E_INTEGRITY')
+            checked += 1
+        require(checked == len(refs), 'E_INTEGRITY')
         key_bytes = read_file(Path(data_dir) / 'owner-key.pem', 16384)
         require(public_key(key_bytes) == payload['enrollment']['payload']['owner_public_key'], 'E_INTEGRITY')
         key = serialization.load_pem_private_key(key_bytes, None)
@@ -51,7 +58,7 @@ def export_checkpoint(data_dir, output, ttl_hours=1, clock=None):
 def review_checkpoint(checkpoint, expected_sha256, diagnostic, clock=None):
     """Compare signed checkpoint metadata with a GOVREAD diagnostic report."""
     now = (clock or (lambda: datetime.now(timezone.utc)))()
-    payload, _ = load_checkpoint(checkpoint, expected_sha256, now)
+    index = inspect_checkpoint_index(checkpoint, expected_sha256, now)
     report = strict_json(read_file(diagnostic, 4096))
     if isinstance(report, dict) and set(report) == {'source', 'recorded_at', 'plan_sha256', 'result'}:
         report = report['result']
@@ -61,20 +68,14 @@ def review_checkpoint(checkpoint, expected_sha256, diagnostic, clock=None):
             and report['database_access'] == 'read-only'
             and report['trust'] == 'diagnostic-only-not-a-checkpoint-or-source-proof',
             'E_GOVERNANCE_DIAGNOSTIC')
-    governance = {key: payload[key] for key in ('core', 'spaces', 'tombstones', 'revocation_epoch')}
-    expected = {
-        'enrollment_sha256': digest(payload['enrollment']),
-        'governance_sha256': digest(governance),
-        'core_revision': payload['core']['revision'],
-        'space_count': len(payload['spaces']),
-        'tombstone_count': len(payload['tombstones']),
-    }
+    expected = {key: index[key] for key in ('enrollment_sha256', 'governance_sha256', 'core_revision',
+                                            'space_count', 'tombstone_count')}
     require(all(type(report[key]) is type(value) and report[key] == value
                 for key, value in expected.items()), 'E_GOVERNANCE_MISMATCH')
     return {
         'status': 'checkpoint-matches-diagnostic',
         'checkpoint_sha256': expected_sha256,
-        'expires_at': payload['expires_at'],
+        'expires_at': index['expires_at'],
         'source_currentness_verified': False,
         'registration_performed': False,
     }

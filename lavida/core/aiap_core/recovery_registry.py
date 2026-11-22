@@ -10,7 +10,7 @@ import sqlite3
 import stat
 
 from .contracts import Fault, canonical, digest, exact, require
-from .recovery_checkpoint import load_checkpoint, strict_json
+from .recovery_checkpoint import load_checkpoint, load_checkpoint_index, strict_json
 from .recovery_observation import verify_observation
 from .service import parse, stamp
 
@@ -123,11 +123,15 @@ class CheckpointRegistry:
                 and expires - issued <= timedelta(hours=24), 'E_RECOVERY_REGISTRY')
         return enrollment, head
 
-    def _candidate(self, checkpoint_path, checkpoint_sha256, enrollment, now):
+    def _candidate(self, checkpoint_path, checkpoint_sha256, enrollment, now, *, index_only):
         checkpoint = Path(checkpoint_path)
         require(not checkpoint.resolve().is_relative_to(self.core), 'E_CHECKPOINT_LOCATION')
         try:
-            payload, refs = load_checkpoint(checkpoint, checkpoint_sha256, now)
+            if index_only:
+                payload, memories, preferences = load_checkpoint_index(checkpoint, checkpoint_sha256, now)
+            else:
+                payload, memories = load_checkpoint(checkpoint, checkpoint_sha256, now)
+                preferences = {}
         except (OSError, ValueError, AttributeError, TypeError, KeyError, RecursionError) as exc:
             raise Fault('E_CHECKPOINT_INPUT') from exc
         require(digest(payload['enrollment']) == enrollment, 'E_RECOVERY_ENROLLMENT_PIN')
@@ -139,13 +143,14 @@ class CheckpointRegistry:
             'issued_at': payload['issued_at'],
             'expires_at': payload['expires_at'],
         }
-        return head, payload, refs
+        counts = {'current_object_count': len(memories), 'preference_manifest_count': len(preferences)}
+        return head, payload, counts
 
     def register(self, checkpoint_path, checkpoint_sha256):
         with self._transaction(write=True) as db:
             enrollment, previous = self._read(db)
             now = self.clock()
-            head, _, _ = self._candidate(checkpoint_path, checkpoint_sha256, enrollment, now)
+            head, _, counts = self._candidate(checkpoint_path, checkpoint_sha256, enrollment, now, index_only=True)
             registered = self.clock()
             require(registered >= now and (previous is None or registered >= _time(previous['registered_at'])),
                     'E_RECOVERY_CLOCK_ROLLBACK')
@@ -167,7 +172,7 @@ class CheckpointRegistry:
                             'E_CHECKPOINT_DIVERGENCE')
             if status == 'checkpoint-registered':
                 db.execute('UPDATE registry SET head=? WHERE id=1', (canonical(head).decode(),))
-        return self._report(enrollment, head, status)
+        return dict(self._report(enrollment, head, status), **counts)
 
     def status(self):
         with self._transaction() as db:
@@ -177,7 +182,7 @@ class CheckpointRegistry:
     def review(self, checkpoint_path):
         """Reverify the exact registered file without reading a backup or granting restoration."""
         with self._transaction() as db:
-            report, _ = self._review(db, checkpoint_path)
+            report, _ = self._review(db, checkpoint_path, index_only=True)
             return report
 
     def review_live(self, checkpoint_path, observe):
@@ -218,7 +223,7 @@ class CheckpointRegistry:
                        source_observation_expires_at=proof['expires_at'],
                        verified_at=stamp(verified))
 
-    def _review(self, db, checkpoint_path, expected=None):
+    def _review(self, db, checkpoint_path, expected=None, *, index_only=False):
         enrollment, head = self._read(db)
         require(head is not None, 'E_RECOVERY_REGISTRY_EMPTY')
         if expected is not None:
@@ -226,13 +231,13 @@ class CheckpointRegistry:
                     'E_RECOVERY_REGISTRY_CHANGED')
         now = self.clock()
         require(now >= _time(head['registered_at']), 'E_RECOVERY_CLOCK_ROLLBACK')
-        actual, payload, refs = self._candidate(
-            checkpoint_path, head['checkpoint_sha256'], enrollment, now)
+        actual, payload, counts = self._candidate(
+            checkpoint_path, head['checkpoint_sha256'], enrollment, now, index_only=index_only)
         require(actual == {key: value for key, value in head.items() if key != 'registered_at'},
                 'E_RECOVERY_REGISTRY')
         report = self._report(enrollment, head, 'checkpoint-matches-registration', not_before=now)
         require(report['checkpoint_window'] == 'within-validity-window', 'E_EXPIRED')
-        return dict(report, current_object_count=len(refs),
+        return dict(report, **counts,
                     tombstone_count=len(payload['tombstones'])), payload
 
     def _report(self, enrollment, head, status, not_before=None):

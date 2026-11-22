@@ -13,7 +13,7 @@ class Server(ThreadingHTTPServer):
     daemon_threads=True
     def __init__(self,address,service):self.service=service;super().__init__(address,Handler)
 class Handler(BaseHTTPRequestHandler):
-    server_version='AIAP-Core/0.2.2'
+    server_version='AIAP-Core/0.2.3'
     def setup(self):super().setup();self.connection.settimeout(10)
     def log_message(self,*args):pass
     def reply(self,status,data):
@@ -23,7 +23,7 @@ class Handler(BaseHTTPRequestHandler):
     def run_request(self):
         try:
             require(not self.headers.get('Origin'),'E_ORIGIN',403)
-            if self.command=='GET' and self.path=='/health':return self.reply(200,{'service':'aiap-core','version':'0.2.2','initialized':self.server.service.db.exists()})
+            if self.command=='GET' and self.path=='/health':return self.reply(200,{'service':'aiap-core','version':'0.2.3','initialized':self.server.service.db.exists()})
             auth=self.headers.get('Authorization','');require(auth.startswith('Bearer '),'E_IDENTITY',401);token=auth[7:];s=self.server.service
             if self.command=='GET':
                 if self.path=='/v1/session':result=s.session(token)
@@ -37,14 +37,21 @@ class Handler(BaseHTTPRequestHandler):
                 raw=self.rfile.read(length);require(len(raw)==length)
                 body=json.loads(raw,object_pairs_hook=reject_duplicates,parse_constant=lambda _:(_ for _ in ()).throw(ValueError('nonfinite JSON')))
                 if self.path=='/v1/search':result=s.search(token,body)
+                elif self.path=='/v1/memories/relations':result=s.related_memories(token,body)
+                elif self.path=='/v1/memories/similar':result=s.related_memories(token,body,similar=True)
+                elif self.path=='/v1/memories/list':result=s.list_memories(token,body)
                 elif self.path=='/v1/context':result=s.search(token,body,context=True)
+                elif self.path=='/v1/context/adopt':result=s.report_adoption(token,body)
                 elif self.path=='/v1/context/ack':result=s.acknowledge(token,body)
                 elif self.path=='/v1/deltas/preflight':result=s.preflight_candidate(token,body)
                 elif self.path=='/v1/deltas/propose-revision':result=s.propose_revision(token,body)
                 elif self.path=='/v1/deltas/propose-checked':result=s.propose_checked(token,body)
                 elif self.path=='/v1/deltas/propose':result=s.propose(token,body)
+                elif self.path=='/v1/deltas/propose-archive':result=s.propose_archive(token,body)
+                elif self.path=='/v1/deltas/batch':result=s.memory_batch(token,body)
+                elif self.path=='/v1/deltas/status':result=s.proposal_status(token,body)
                 elif self.path=='/v1/deltas/review':exact(body,['delta_id']);result=s.review(token,body['delta_id'])
-                elif self.path=='/v1/deltas/decide':exact(body,['delta_id','approve']);result=s.decide(token,body['delta_id'],body['approve'])
+                elif self.path=='/v1/deltas/decide':exact(body,['delta_id','approve'],['reason']);result=s.decide(token,body['delta_id'],body['approve'],reason=body.get('reason'))
                 elif self.path=='/v1/memories/delete/preview':result=s.preview_delete(token,body)
                 elif self.path=='/v1/memories/delete':result=s.delete(token,body)
                 else:raise Fault('E_NOT_FOUND',404)

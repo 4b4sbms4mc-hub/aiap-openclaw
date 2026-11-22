@@ -1,7 +1,7 @@
 import argparse,json,os,re,stat,sys,uuid
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from .service import Service, save_private
+from .service import DECISION_REASONS, Service, save_private
 from .server import serve
 from .client import Client,proposal
 from .admission import TRIGGERS
@@ -69,10 +69,12 @@ def _read_session_excerpt():
 
 
 def main():
-    ap=argparse.ArgumentParser(description='AIAP Core Service 0.2.2 — Wang Lu');ap.add_argument('--data-dir',default=os.environ.get('AIAP_DATA_DIR','./data'));sp=ap.add_subparsers(dest='command',required=True)
+    ap=argparse.ArgumentParser(description='AIAP Core Service 0.2.3 — Wang Lu');ap.add_argument('--data-dir',default=os.environ.get('AIAP_DATA_DIR','./data'));sp=ap.add_subparsers(dest='command',required=True)
     sp.add_parser('init',help='Initialize once without overwriting an existing identity.')
     sv=sp.add_parser('serve');sv.add_argument('--host',default='127.0.0.1');sv.add_argument('--port',type=int,default=8042);sv.add_argument('--archive-interval',type=int,default=3600)
     g=sp.add_parser('grant');g.add_argument('--spaces',nargs='+',required=True);g.add_argument('--purpose',required=True);g.add_argument('--runtime',required=True);g.add_argument('--role',choices=['adapter','owner'],default='adapter');g.add_argument('--days',type=int,default=7);g.add_argument('--output',required=True)
+    project = sp.add_parser('project-space', help='Create an isolated local project space, without granting access.')
+    project.add_argument('slug', help='Up to 63 lowercase letters, digits or hyphens, starting with a letter or digit.')
     reissue = sp.add_parser('grant-reissue', help='Issue a fresh local credential with the same permissions.')
     reissue.add_argument('--grant-id', required=True)
     reissue.add_argument('--days', type=int, default=7)
@@ -85,6 +87,14 @@ def main():
     grants.add_argument('--limit', type=int, default=20)
     preflight = sp.add_parser('preflight-candidate', help='Check a JSON memory candidate from stdin without submitting it.')
     preflight.add_argument('--credential-file', required=True)
+    browse = sp.add_parser('list-memories', help='Browse one space by memory ID.')
+    browse.add_argument('--credential-file', required=True)
+    browse.add_argument('--validity', choices=('current', 'expired', 'superseded'), help='Owner review of expired or superseded records.')
+    browse.add_argument('--space', required=True)
+    browse.add_argument('--purpose', required=True)
+    for option in ('level', 'memory-type', 'updated-from', 'updated-before', 'after'):
+        browse.add_argument('--' + option)
+    browse.add_argument('--limit', type=int, default=20)
     pending = sp.add_parser('pending', help='List local proposals awaiting an Owner decision.')
     pending.add_argument('--credential-file', required=True)
     pending.add_argument('--space', help='Show proposals that include this space.')
@@ -125,6 +135,8 @@ def main():
     context = sp.add_parser('context', help='Compile a short-lived authorized view from local memories.')
     context.add_argument('--credential-file', required=True)
     context.add_argument('--space', required=True)
+    context.add_argument('--preference-condition')
+    context.add_argument('--skip-preferences', action='store_true')
     _add_recall_options(context)
     context.add_argument('--limit', type=int, default=20)
     acknowledge = sp.add_parser('context-ack', help='Record use of a local authorized view.')
@@ -165,6 +177,62 @@ def main():
     manifest.add_argument('--credential-file', required=True)
     manifest.add_argument('--space', required=True)
     manifest.add_argument('--core-revision', type=int, required=True)
+    validity = sp.add_parser('set-validity', help='Set an absolute expiry or record a replacement as local Owner.')
+    validity.add_argument('--credential-file', required=True)
+    validity.add_argument('--space', required=True)
+    validity.add_argument('--memory-id', required=True)
+    validity.add_argument('--base-revision', type=int, required=True)
+    mode = validity.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--expires-at', help='ISO timestamp with timezone offset.')
+    mode.add_argument('--clear-expiry', action='store_true', help='Remove the deadline at the specified current revision.')
+    mode.add_argument('--successor-id', help='Approved replacement in the same space.')
+    validity.add_argument('--successor-revision', type=int)
+    find_evidence = sp.add_parser('find-preference-evidence', help='Find potentially related M1 observations as Owner.')
+    find_evidence.add_argument('--credential-file', required=True)
+    find_evidence.add_argument('--space', required=True)
+    find_evidence.add_argument('--query', required=True)
+    find_evidence.add_argument('--limit', type=int, default=20)
+    candidates = sp.add_parser('preference-candidates', help='Browse repeated M1 preference evidence as Owner.')
+    candidates.add_argument('--credential-file', required=True)
+    candidates.add_argument('--space', required=True)
+    candidates.add_argument('--after', default='')
+    candidates.add_argument('--limit', type=int, default=20)
+    evidence = sp.add_parser('review-preference-evidence', help='Review approved M1 observations grouped by source as local Owner.')
+    evidence.add_argument('--credential-file', required=True)
+    evidence.add_argument('--space', required=True)
+    evidence.add_argument('--memory-ids', nargs='+', required=True)
+    for command in ('preview-preference', 'confirm-preference'):
+        preview = sp.add_parser(command)
+        for option in ('credential-file', 'space', 'statement', 'condition'):
+            preview.add_argument('--' + option, required=True)
+        preview.add_argument('--runtime', action='append', required=True)
+        preview.add_argument('--replaces')
+        preview.add_argument('--exception')
+        preview.add_argument('--project-rule')
+        preview.add_argument('--same-event', nargs='+', action='append', metavar='SOURCE_REF',
+                             help='Group two or more selected sources describing one event; repeat for other events.')
+        preview.add_argument('--evidence-revision', nargs=2, action='append', metavar=('ID', 'REVISION'),
+                             help='Require the selected evidence to match the revision you reviewed; repeat per ID.')
+        preview.add_argument('--supporting', nargs='+')
+        preview.add_argument('--counterexamples', nargs='+')
+        if command == 'confirm-preference':
+            preview.add_argument('--preview-sha256', required=True)
+    recall = sp.add_parser('recall-preferences', help='Read confirmed defaults for an exact condition and credential runtime.')
+    for option in ('credential-file', 'space', 'condition'):
+        recall.add_argument('--' + option, required=True)
+    baseline = sp.add_parser('preview-preference-baseline', help='Review the unsigned registry across every space as Owner.')
+    baseline.add_argument('--credential-file', required=True)
+    pref_manifest = sp.add_parser('preference-manifest', help='Read a preference digest and its local Core signature status as Owner.')
+    pref_manifest.add_argument('--credential-file', required=True)
+    pref_manifest.add_argument('--space', required=True)
+    pref_list = sp.add_parser('list-preferences', help='Browse current and historical preferences as Owner.')
+    pref_list.add_argument('--credential-file', required=True)
+    pref_list.add_argument('--space', required=True)
+    pref_list.add_argument('--after', default='')
+    pref_list.add_argument('--limit', type=int, default=20)
+    withdraw = sp.add_parser('withdraw-preference')
+    for option in ('credential-file', 'space', 'preference-id'):
+        withdraw.add_argument('--' + option, required=True)
     history = sp.add_parser('history', help='List local memory revisions or read one revision as Owner.')
     history.add_argument('--credential-file', required=True)
     history.add_argument('--space', required=True)
@@ -197,6 +265,13 @@ def main():
     rev=sp.add_parser('revoke');rev.add_argument('--grant-id',required=True)
     archive = sp.add_parser('archive', help='Run or preview automatic local archive rules.')
     archive.add_argument('--dry-run', action='store_true', help='Count and preview eligible records without changing them.')
+    compare = sp.add_parser('compare-local-checkpoint', help='Compare local governance and indexed preferences against a pinned checkpoint.')
+    compare.add_argument('--credential-file', required=True)
+    compare.add_argument('--checkpoint', required=True)
+    compare.add_argument('--checkpoint-sha256', required=True)
+    inspect_index = sp.add_parser('inspect-checkpoint-index', help='Inspect a pinned checkpoint index without a registry.')
+    inspect_index.add_argument('--checkpoint', required=True)
+    inspect_index.add_argument('--checkpoint-sha256', required=True)
     recovery=sp.add_parser('recovery',help='Manage checkpoints and create isolated recovery copies.')
     recovery.add_argument('--registry-dir',required=True,help='Private registry directory outside Core data and backups.')
     rc=recovery.add_subparsers(dest='recovery_command',required=True)
@@ -247,6 +322,7 @@ def main():
         if command in ['review','decide']:x.add_argument('--delta-id',required=True)
         if command == 'review':
             x.add_argument('--changes', action='store_true', help='Preview proposed text and revisions in local mode.')
+        if command=='decide':x.add_argument('--reason', choices=DECISION_REASONS, help='Record an optional Owner decision reason.')
         if command=='decide':x.add_argument('--approve',action='store_true',help='Explicitly approve the reviewed candidate; otherwise reject.')
     args=ap.parse_args()
     if args.command in ('search', 'context') and args.level == 'M3' and not args.include_archived:
@@ -283,6 +359,12 @@ def main():
                                     args.space, args.target_space)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
+    if args.command == 'inspect-checkpoint-index':
+        from datetime import datetime, timezone
+        from .recovery_checkpoint import inspect_checkpoint_index
+        result = inspect_checkpoint_index(args.checkpoint, args.checkpoint_sha256, datetime.now(timezone.utc))
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
     if args.command=='recovery':
         from .recovery_registry import CheckpointRegistry
         registry=CheckpointRegistry(args.registry_dir,args.data_dir)
@@ -303,14 +385,18 @@ def main():
         print(json.dumps(result,ensure_ascii=False,indent=2))
         return
     local=getattr(args,'local',False)
-    local_commands = ('preflight-candidate', 'pending', *procedural_commands, 'capture-session', 'capture-owner-observation', 'context', 'context-ack', 'confirm-use',
-                      'summary', 'history', 'grants', 'grant-reissue', 'audit',
+    local_commands = ('list-memories', 'preflight-candidate', 'pending', *procedural_commands, 'capture-session', 'capture-owner-observation', 'context', 'context-ack', 'confirm-use',
+                      'summary', 'project-space', 'set-validity', 'compare-local-checkpoint', 'preference-candidates', 'review-preference-evidence', 'preview-preference', 'confirm-preference', 'withdraw-preference', 'recall-preferences', 'list-preferences', 'preference-manifest', 'preview-preference-baseline', 'history', 'grants', 'grant-reissue', 'audit',
                       'compact-core', 'compact-manifest', 'profile-summary',
                       'profile-summary-select', 'profile-summary-clear', *_LIFECYCLE_COMMANDS)
     s=Service(args.data_dir,enable_semantic=not local and args.command not in local_commands)
     if args.command=='init':result=s.initialize()
     elif args.command=='serve':return serve(s,args.host,args.port,args.archive_interval)
     elif args.command=='archive':result=s.archive_cycle(dry_run=args.dry_run)
+    elif args.command == 'compare-local-checkpoint':
+        from .recovery_checkpoint import compare_local_checkpoint
+        result = compare_local_checkpoint(s, _read_grant_token(args.credential_file), args.checkpoint, args.checkpoint_sha256)
+    elif args.command == 'project-space':result=s.create_project_space(args.slug)
     elif args.command=='grant':
         if Path(args.output).exists():raise Fault('E_OUTPUT_EXISTS',409)
         r=s.issue_grant(args.spaces,args.purpose,args.runtime,args.role,args.days)
@@ -340,6 +426,12 @@ def main():
     elif args.command=='grant-status':result=s.grant_status(_read_grant_token(args.credential_file))
     elif args.command == 'grants':
         result = s.list_grants(role=args.role, after=args.after, limit=args.limit)
+    elif args.command == 'list-memories':
+        body = {'space_ref': args.space, 'purpose': args.purpose, 'limit': args.limit}
+        for key in ('level', 'memory_type', 'updated_from', 'updated_before', 'after', 'validity'):
+            if getattr(args, key) is not None:
+                body[key] = getattr(args, key)
+        result = s.list_memories(_read_grant_token(args.credential_file), body)
     elif args.command == 'preflight-candidate':
         from .server import reject_duplicates
         try:
@@ -410,6 +502,9 @@ def main():
     elif args.command == 'context':
         token = _read_grant_token(args.credential_file)
         request = _search_request(args, s.session(token))
+        if args.preference_condition is not None:
+            request['preference_condition'] = args.preference_condition
+        request['skip_preferences'] = args.skip_preferences
         result = s.search(token, {**request, 'limit': args.limit}, context=True)
     elif args.command == 'context-ack':
         result = s.acknowledge(_read_grant_token(args.credential_file), {'view_id': args.view_id})
@@ -432,6 +527,41 @@ def main():
         result = s.set_summary_selection(_read_grant_token(args.credential_file), args.space,
                                          memory_id=getattr(args, 'memory_id', None),
                                          revision=getattr(args, 'revision', None))
+    elif args.command == 'set-validity':
+        result = s.set_memory_validity(_read_grant_token(args.credential_file), args.space, args.memory_id,
+                                       args.base_revision, expires_at=args.expires_at, successor_id=args.successor_id,
+                                       successor_revision=args.successor_revision, clear_expiry=args.clear_expiry)
+    elif args.command == 'find-preference-evidence':
+        result = s.find_preference_evidence(_read_grant_token(args.credential_file), args.space, args.query, args.limit)
+    elif args.command == 'preference-candidates':
+        result = s.preference_candidates(_read_grant_token(args.credential_file), args.space,
+                                        after=args.after, limit=args.limit)
+    elif args.command == 'review-preference-evidence':
+        result = s.review_preference_evidence(_read_grant_token(args.credential_file), args.space, args.memory_ids)
+    elif args.command in ('preview-preference', 'confirm-preference'):
+        revisions = {}
+        for ident, raw in args.evidence_revision or ():
+            require(re.fullmatch(r'[1-9][0-9]{0,18}', raw) and ident not in revisions)
+            revisions[ident] = int(raw)
+        fields = dict(statement=args.statement, condition=args.condition, runtimes=args.runtime,
+                      exception=args.exception, project_rule=args.project_rule,
+                      supporting=args.supporting, counterexamples=args.counterexamples, replaces=args.replaces, same_event=args.same_event,
+                      evidence_revisions=revisions)
+        token = _read_grant_token(args.credential_file)
+        if args.command == 'confirm-preference':
+            result = s.confirm_preference(token, args.space, args.preview_sha256, **fields)
+        else:
+            result = s.preview_preference(token, args.space, **fields)
+    elif args.command == 'preview-preference-baseline':
+        result = s.preview_preference_baseline(_read_grant_token(args.credential_file))
+    elif args.command == 'preference-manifest':
+        result = s.preference_manifest(_read_grant_token(args.credential_file), args.space)
+    elif args.command == 'list-preferences':
+        result = s.list_preferences(_read_grant_token(args.credential_file), args.space, after=args.after, limit=args.limit)
+    elif args.command == 'recall-preferences':
+        result = s.recall_preferences(_read_grant_token(args.credential_file), args.space, args.condition)
+    elif args.command == 'withdraw-preference':
+        result = s.withdraw_preference(_read_grant_token(args.credential_file), args.space, args.preference_id)
     elif args.command == 'history':
         result = s.memory_history(_read_grant_token(args.credential_file), args.space, args.memory_id,
                                   revision=args.revision, before=args.before, limit=args.limit)
@@ -468,7 +598,7 @@ def main():
         else:
             require(session['role']=='owner','E_DENIED',403)
             if args.command=='review':result=s.review(token,args.delta_id,changes=args.changes)
-            else:result=s.decide(token,args.delta_id,args.approve,allow_lifecycle=True)
+            else:result=s.decide(token,args.delta_id,args.approve,allow_lifecycle=True,reason=args.reason)
     else:
         credential=json.loads(Path(args.credential_file).read_text(encoding='utf-8'));client=Client(args.base_url,credential['token']);session=client.call('/v1/session')
         if args.command=='session':result=session
@@ -476,7 +606,7 @@ def main():
         elif args.command=='search':result=client.call('/v1/search',_search_request(args,session))
         elif args.command=='propose':result=client.call('/v1/deltas/propose',proposal(session,args.space,args.text,pinned=args.pinned))
         elif args.command=='review':result=client.call('/v1/deltas/review',{'delta_id':args.delta_id})
-        elif args.command=='decide':result=client.call('/v1/deltas/decide',{'delta_id':args.delta_id,'approve':args.approve})
+        elif args.command=='decide':result=client.call('/v1/deltas/decide',{'delta_id':args.delta_id,'approve':args.approve,**({'reason':args.reason} if args.reason else {})})
         else:
             if session['role']!='owner':raise Fault('E_DENIED',403)
             for space,text in [('space:work','DEMO：配置服务器时每次只给一步。'),('space:life','DEMO：周六参加陶艺活动。')]:
