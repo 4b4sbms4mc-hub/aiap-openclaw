@@ -1454,7 +1454,7 @@ class Service:
                     return {'preferences': records, 'next_preference_id': preference_id}
                 seen.add(preference_id)
                 if check_evidence:
-                    record['evidence_status'] = self._preference_evidence_status(c, owner, space, scope, record, now)
+                    record['evidence_status'] = self._m1_evidence_status(c, owner, space, scope, record['evidence_refs'], now)
                 records.append(record)
                 preference_id = record.get('replaces')
                 if preference_id is None:
@@ -1464,8 +1464,7 @@ class Service:
                         and predecessor['status'] == 'superseded', 'E_INTEGRITY', 500)
                 record = predecessor
 
-    def _preference_evidence_status(self, c, owner, space, scope, preference, now):
-        refs = preference['evidence_refs']
+    def _m1_evidence_status(self, c, owner, space, scope, refs, now):
         if not refs:
             return []
         slots = ','.join('?' for _ in refs)
@@ -1506,7 +1505,7 @@ class Service:
                 flagged = []
                 for record in page:
                     scope_changed = record['scope'] != scope
-                    statuses = self._preference_evidence_status(c, owner, space, scope, record, now)
+                    statuses = self._m1_evidence_status(c, owner, space, scope, record['evidence_refs'], now)
                     changes = [{**item, 'roles': ref['roles']}
                                for item, ref in zip(statuses, record['evidence_refs']) if item['state'] != 'current']
                     if scope_changed or changes:

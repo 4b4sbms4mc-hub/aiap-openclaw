@@ -9,10 +9,7 @@ from . import mirror_store
 from .contracts import Fault, canonical, digest, exact, require
 
 
-def _snapshot(service, connection, token, space, events):
-    owner = service._grant(connection, token)
-    service._allow(owner, [space], 'read', owner=True)
-    scope = service._scope(connection, owner, space)
+def _event_refs(events):
     require(isinstance(events, list) and len(events) <= 50)
     versions, event_numbers = {}, {}
     for number, event in enumerate(events, start=1):
@@ -23,6 +20,15 @@ def _snapshot(service, connection, token, space, events):
             require(isinstance(mid, str) and 0 < len(mid) <= 200 and mid not in versions
                     and type(revision) is int and revision > 0)
             versions[mid], event_numbers[mid] = revision, number
+    require(len(versions) <= 50)
+    return versions, event_numbers
+
+
+def _snapshot(service, connection, token, space, events):
+    owner = service._grant(connection, token)
+    service._allow(owner, [space], 'read', owner=True)
+    scope = service._scope(connection, owner, space)
+    versions, event_numbers = _event_refs(events)
     sources = service._preference_sources(connection, owner, space, list(versions))
     grouped = [{'event': i + 1, 'observations': []} for i in range(len(events))]
     for source in sources['sources']:
@@ -76,11 +82,25 @@ def render(service, token, space, events, generate, *, save=False):
             'traits': traits, 'events': snapshot['events']}
 
 
-def saved(service, token, space, *, clear=False):
+def _review_sources(service, db, owner, space, scope, portrait):
+    events = portrait['events']
+    versions, numbers = _event_refs(events)
+    refs = [{'memory_id': mid, 'revision': revision} for mid, revision in versions.items()]
+    statuses = service._m1_evidence_status(db, owner, space, scope, refs, service.now())
+    groups = [{'event': i + 1, 'observations': []} for i in range(len(events))]
+    for item in statuses:
+        mid = item['memory_id']
+        groups[numbers[mid] - 1]['observations'].append({
+            'memory_id': mid, 'selected_revision': versions[mid],
+            'current_revision': item['current_revision'], 'state': item['state']})
+    return groups
+
+
+def saved(service, token, space, *, clear=False, review_sources=False):
     with service.tx(read_only=not clear) as db:
         owner = service._grant(db, token)
         service._allow(owner, [space], 'write' if clear else 'read', owner=True)
-        service._scope(db, owner, space)
+        scope = service._scope(db, owner, space)
         path = mirror_store.path_for(service, owner['avatar'], space)
         if clear:
             # A new generation also cancels a first refresh still running outside the lock.
@@ -91,14 +111,22 @@ def saved(service, token, space, *, clear=False):
             return {'status': 'empty', 'space_ref': space}
         portrait = record['portrait']
         exact(portrait, ['events', 'source_sha256', 'traits'])
+        result = {'space_ref': space, 'status': 'stale'}
+        if review_sources:
+            groups = _review_sources(service, db, owner, space, scope, portrait)
+            result['events'] = groups
+            if any(ref['state'] != 'current' for group in groups for ref in group['observations']):
+                return result
         try:
             snapshot = _snapshot(service, db, token, space, portrait['events'])
         except Fault as error:
             if error.code not in ('E_NOT_FOUND', 'E_VERSION_CONFLICT', 'E_MIRROR_EVENT_OVERLAP'):
                 raise
-            return {'status': 'stale', 'space_ref': space}
+            return result
         if digest(snapshot) != portrait['source_sha256']:
-            return {'status': 'stale', 'space_ref': space}
+            return result
+        if review_sources:
+            return {**result, 'status': 'current'}
         traits = _supported_traits(portrait['traits'], len(snapshot['events']))
         return {'status': 'current', 'space_ref': space, 'traits': traits, 'events': snapshot['events']}
 

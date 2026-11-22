@@ -133,6 +133,38 @@ class ServiceTests(unittest.TestCase):
         saved(self.s, self.owner, space, clear=True)
         self.assertEqual(resolve(), before)
 
+    def test_mirror_review_reports_only_previously_selected_versions(self):
+        from aiap_core.mirror import render, saved
+        space = 'space:work'
+        ids = [self.add(text, level='M1') for text in ('First private observation', 'Second private observation',
+                                                        'Third private observation')]
+        refs = [dict(memory_id=mid, revision=1) for mid in ids]
+        render(self.s, self.owner, space, [refs[:2], refs[2:]], lambda _: [
+            dict(statement='Private portrait', support=[1, 2], counterexamples=[])], save=True)
+        def review():
+            return saved(self.s, self.owner, space, review_sources=True)
+        self.assertEqual(review()['status'], 'current')
+        old = self.s.memory_for_update(self.work, space, ids[1], 1)
+        draft = self.s.propose(self.work, self.draft('Revised private observation', old=old))
+        self.s.decide(self.owner, draft['delta_id'], True)
+        self.s.set_memory_validity(self.owner, space, ids[2], 1, expires_at=self.now.isoformat())
+        extra = self.add('Unselected observation', level='M1')
+        before = self.s.db.read_bytes()
+        result = review()
+        self.assertEqual(result['status'], 'stale')
+        self.assertEqual(result['events'], [
+            {'event': 1, 'observations': [
+                dict(memory_id=ids[0], selected_revision=1, current_revision=1, state='current'),
+                dict(memory_id=ids[1], selected_revision=1, current_revision=2, state='revised')]},
+            {'event': 2, 'observations': [
+                dict(memory_id=ids[2], selected_revision=1, current_revision=None, state='unavailable')]}])
+        self.assertNotIn(extra, json.dumps(result))
+        self.assertNotIn('private', json.dumps(result).lower())
+        self.assertEqual(self.s.db.read_bytes(), before)
+        self.fault('E_DENIED', lambda: saved(self.s, self.work, space, review_sources=True))
+        saved(self.s, self.owner, space, clear=True)
+        self.assertEqual(review(), {'status': 'empty', 'space_ref': space})
+
     def test_mirror_clear_during_generation_prevents_late_save(self):
         from aiap_core.mirror import render, saved
         space = 'space:work'

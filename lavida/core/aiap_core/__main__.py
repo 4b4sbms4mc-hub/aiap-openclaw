@@ -226,7 +226,7 @@ def main():
     baseline = sp.add_parser('preview-preference-baseline', help='Review the unsigned registry across every space as Owner.')
     baseline.add_argument('--credential-file', required=True)
     baseline.add_argument('--expected-sha256', help='Reject the review if the baseline digest has changed.')
-    for command in ('mirror-preview', 'mirror-refresh', 'mirror-show', 'mirror-clear'):
+    for command in ('mirror-preview', 'mirror-refresh', 'mirror-show', 'mirror-review-sources', 'mirror-clear'):
         mirror = sp.add_parser(command, help='Manage an Owner-only local reflection.')
         mirror.add_argument('--credential-file', required=True)
         mirror.add_argument('--space', required=True)
@@ -408,7 +408,7 @@ def main():
         return
     local=getattr(args,'local',False)
     local_commands = ('list-memories', 'preflight-candidate', 'pending', *procedural_commands, 'capture-session', 'capture-owner-observation', 'context', 'context-ack', 'confirm-use',
-                      'summary', 'project-space', 'set-validity', 'compare-local-checkpoint', 'preference-candidates', 'review-preference-evidence', 'preview-preference', 'confirm-preference', 'withdraw-preference', 'recall-preferences', 'list-preferences', 'preference-history', 'preference-manifest', 'preview-preference-baseline', 'activate-preference-baseline', 'mirror-preview', 'mirror-refresh', 'mirror-show', 'mirror-clear', 'history', 'grants', 'grant-reissue', 'audit',
+                      'summary', 'project-space', 'set-validity', 'compare-local-checkpoint', 'preference-candidates', 'review-preference-evidence', 'preview-preference', 'confirm-preference', 'withdraw-preference', 'recall-preferences', 'list-preferences', 'preference-history', 'preference-manifest', 'preview-preference-baseline', 'activate-preference-baseline', 'mirror-preview', 'mirror-refresh', 'mirror-show', 'mirror-review-sources', 'mirror-clear', 'history', 'grants', 'grant-reissue', 'audit',
                       'compact-core', 'compact-manifest', 'profile-summary',
                       'profile-summary-select', 'profile-summary-clear', *_LIFECYCLE_COMMANDS)
     s=Service(args.data_dir,enable_semantic=not local and args.command not in local_commands)
@@ -578,9 +578,10 @@ def main():
             result = s.preview_preference(token, args.space, **fields)
     elif args.command == 'preview-preference-baseline':
         result = s.preview_preference_baseline(_read_grant_token(args.credential_file), expected_sha256=args.expected_sha256)
-    elif args.command in ('mirror-show', 'mirror-clear'):
+    elif args.command in ('mirror-show', 'mirror-review-sources', 'mirror-clear'):
         from .mirror import saved
-        result = saved(s, _read_grant_token(args.credential_file), args.space, clear=args.command == 'mirror-clear')
+        result = saved(s, _read_grant_token(args.credential_file), args.space, clear=args.command == 'mirror-clear',
+                       review_sources=args.command == 'mirror-review-sources')
     elif args.command in ('mirror-preview', 'mirror-refresh'):
         from .mirror import render, local_generator
         raw = sys.stdin.buffer.read(32769)
