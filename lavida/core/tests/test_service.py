@@ -211,6 +211,35 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(evidence_state()['state'], 'unavailable')
         self.assertIsNone(evidence_state()['current_revision'])
 
+    def test_owner_review_scan_advances_through_empty_pages(self):
+        space = 'space:work'
+        refs = {}
+        for word in ('first', 'second', 'third'):
+            mid = self.add(word, level='M1')
+            fields = dict(statement=word, condition='release', runtimes=['test-work'],
+                          supporting=[mid], counterexamples=[mid])
+            pin = self.s.preview_preference(self.owner, space, **fields)['preview_sha256']
+            record = self.s.confirm_preference(self.owner, space, pin, **fields)
+            refs[record['preference_id']] = mid
+        first, second, third = sorted(refs)
+        for key in (second, third):
+            self.s.set_memory_validity(self.owner, space, refs[key], 1, expires_at=self.now.isoformat())
+        self.s.withdraw_preference(self.owner, space, third)
+        def scan(after=''):
+            return self.s.list_preferences(self.owner, space, after=after, limit=1, needs_review=True)
+        before = self.s.db.read_bytes()
+        self.assertEqual(scan(), {'preferences': [], 'next_after': first, 'scanned': 1})
+        page = scan(first)
+        self.assertIsNone(page['next_after'])
+        item, = page['preferences']
+        self.assertEqual(item['preference_id'], second)
+        self.assertEqual(item['changed_evidence'], [{'memory_id': refs[second], 'confirmed_revision': 1,
+                                                    'roles': ['supporting', 'counterexample'],
+                                                    'current_revision': None, 'state': 'unavailable'}])
+        self.assertEqual(self.s.list_preferences(self.owner, 'space:life', needs_review=True)['scanned'], 0)
+        self.fault('E_DENIED', lambda: self.s.list_preferences(self.work, space, needs_review=True))
+        self.assertEqual(self.s.db.read_bytes(), before)
+
     def test_preference_replacement_and_turn_override(self):
         space = 'space:work'
         def confirm(**changes):

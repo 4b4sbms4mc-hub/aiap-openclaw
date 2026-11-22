@@ -1372,19 +1372,36 @@ class Service:
                              'current_revision': revision, 'state': state})
         return statuses
 
-    def list_preferences(self, token, space, *, after='', limit=20):
+    def list_preferences(self, token, space, *, after='', limit=20, needs_review=False):
         require(isinstance(after, str) and (after == '' or re.fullmatch(r'preference:[0-9a-f]{64}', after)))
         require(type(limit) is int and 1 <= limit <= 100)
+        require(type(needs_review) is bool)
         with self.tx(read_only=True) as c:
             owner = self._grant(c, token)
             self._allow(owner, [space], 'read', owner=True)
-            self._verify_preference_space(c, owner['avatar'], self._scope(c, owner, space))
+            scope = self._scope(c, owner, space)
+            self._verify_preference_space(c, owner['avatar'], scope)
             rows = c.execute("""SELECT value FROM meta WHERE key GLOB 'preference:*' AND key>?
                 AND json_extract(value, '$.avatar_id')=? AND json_extract(value, '$.space_ref')=?
-                ORDER BY key LIMIT ?""", (after, owner['avatar'], space, limit + 1))
+                AND (? = 0 OR json_extract(value, '$.status') = 'confirmed')
+                ORDER BY key LIMIT ?""", (after, owner['avatar'], space, needs_review, limit + 1))
             records = [json.loads(row[0]) for row in rows]
-            return {'preferences': records[:limit],
-                    'next_after': records[limit - 1]['preference_id'] if len(records) > limit else None}
+            next_after = records[limit - 1]['preference_id'] if len(records) > limit else None
+            page = records[:limit]
+            if needs_review:
+                now = self.now()
+                flagged = []
+                for record in page:
+                    if record['scope'] != scope:
+                        continue
+                    statuses = self._preference_evidence_status(c, owner, space, scope, record, now)
+                    changes = [{**item, 'roles': ref['roles']}
+                               for item, ref in zip(statuses, record['evidence_refs']) if item['state'] != 'current']
+                    if changes:
+                        flagged.append({'preference_id': record['preference_id'], 'statement': record['statement'],
+                                        'condition': record['condition'], 'changed_evidence': changes})
+                return {'preferences': flagged, 'next_after': next_after, 'scanned': len(page)}
+            return {'preferences': page, 'next_after': next_after}
 
     def _preference_draft(self, c, owner, space, *, statement, condition, runtimes, exception=None,
                           project_rule=None, supporting=None, counterexamples=None, replaces=None, same_event=None,

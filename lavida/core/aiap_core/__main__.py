@@ -229,6 +229,7 @@ def main():
     pref_list.add_argument('--credential-file', required=True)
     pref_list.add_argument('--space', required=True)
     pref_list.add_argument('--after', default='')
+    pref_list.add_argument('--needs-review', action='store_true', help='Show confirmed preferences with revised or unavailable evidence.')
     pref_list.add_argument('--limit', type=int, default=20)
     pref_history = sp.add_parser('preference-history', help='Read earlier versions of one preference as Owner.')
     pref_history.add_argument('--credential-file', required=True)
@@ -566,7 +567,8 @@ def main():
         result = s.preference_history(_read_grant_token(args.credential_file), args.space, args.preference_id, limit=args.limit,
                                       check_evidence=args.check_evidence)
     elif args.command == 'list-preferences':
-        result = s.list_preferences(_read_grant_token(args.credential_file), args.space, after=args.after, limit=args.limit)
+        result = s.list_preferences(_read_grant_token(args.credential_file), args.space, after=args.after,
+                                    limit=args.limit, needs_review=args.needs_review)
     elif args.command == 'recall-preferences':
         result = s.recall_preferences(_read_grant_token(args.credential_file), args.space, args.condition)
     elif args.command == 'withdraw-preference':
