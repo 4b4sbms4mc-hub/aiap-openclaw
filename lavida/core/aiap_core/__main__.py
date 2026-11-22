@@ -226,12 +226,14 @@ def main():
     baseline = sp.add_parser('preview-preference-baseline', help='Review the unsigned registry across every space as Owner.')
     baseline.add_argument('--credential-file', required=True)
     baseline.add_argument('--expected-sha256', help='Reject the review if the baseline digest has changed.')
-    mirror = sp.add_parser('mirror-preview', help='Reflect privately on selected M1 events from JSON stdin.')
-    mirror.add_argument('--credential-file', required=True)
-    mirror.add_argument('--space', required=True)
-    mirror.add_argument('--model', required=True, help='Model ID served on the local machine.')
-    mirror.add_argument('--port', type=int, default=1234)
-    mirror.add_argument('--local-address', default='127.0.0.1', help='Numeric address assigned to this machine.')
+    for command in ('mirror-preview', 'mirror-refresh', 'mirror-show', 'mirror-clear'):
+        mirror = sp.add_parser(command, help='Manage an Owner-only local reflection.')
+        mirror.add_argument('--credential-file', required=True)
+        mirror.add_argument('--space', required=True)
+        if command in ('mirror-preview', 'mirror-refresh'):
+            mirror.add_argument('--model', required=True, help='Local model for selected events from JSON stdin.')
+            mirror.add_argument('--port', type=int, default=1234)
+            mirror.add_argument('--local-address', default='127.0.0.1', help='Numeric address assigned to this machine.')
     activation = sp.add_parser('activate-preference-baseline', help='Sign a reviewed local preference baseline as Owner.')
     activation.add_argument('--credential-file', required=True)
     activation.add_argument('--expected-sha256', required=True)
@@ -406,7 +408,7 @@ def main():
         return
     local=getattr(args,'local',False)
     local_commands = ('list-memories', 'preflight-candidate', 'pending', *procedural_commands, 'capture-session', 'capture-owner-observation', 'context', 'context-ack', 'confirm-use',
-                      'summary', 'project-space', 'set-validity', 'compare-local-checkpoint', 'preference-candidates', 'review-preference-evidence', 'preview-preference', 'confirm-preference', 'withdraw-preference', 'recall-preferences', 'list-preferences', 'preference-history', 'preference-manifest', 'preview-preference-baseline', 'activate-preference-baseline', 'mirror-preview', 'history', 'grants', 'grant-reissue', 'audit',
+                      'summary', 'project-space', 'set-validity', 'compare-local-checkpoint', 'preference-candidates', 'review-preference-evidence', 'preview-preference', 'confirm-preference', 'withdraw-preference', 'recall-preferences', 'list-preferences', 'preference-history', 'preference-manifest', 'preview-preference-baseline', 'activate-preference-baseline', 'mirror-preview', 'mirror-refresh', 'mirror-show', 'mirror-clear', 'history', 'grants', 'grant-reissue', 'audit',
                       'compact-core', 'compact-manifest', 'profile-summary',
                       'profile-summary-select', 'profile-summary-clear', *_LIFECYCLE_COMMANDS)
     s=Service(args.data_dir,enable_semantic=not local and args.command not in local_commands)
@@ -576,7 +578,10 @@ def main():
             result = s.preview_preference(token, args.space, **fields)
     elif args.command == 'preview-preference-baseline':
         result = s.preview_preference_baseline(_read_grant_token(args.credential_file), expected_sha256=args.expected_sha256)
-    elif args.command == 'mirror-preview':
+    elif args.command in ('mirror-show', 'mirror-clear'):
+        from .mirror import saved
+        result = saved(s, _read_grant_token(args.credential_file), args.space, clear=args.command == 'mirror-clear')
+    elif args.command in ('mirror-preview', 'mirror-refresh'):
         from .mirror import render, local_generator
         raw = sys.stdin.buffer.read(32769)
         require(len(raw) <= 32768, 'E_MIRROR_INPUT_SIZE')
@@ -585,7 +590,7 @@ def main():
         except (ValueError, RecursionError):
             raise Fault('E_SCHEMA') from None
         result = render(s, _read_grant_token(args.credential_file), args.space, events,
-                        local_generator(args.model, args.port, args.local_address))
+                        local_generator(args.model, args.port, args.local_address), save=args.command == 'mirror-refresh')
     elif args.command == 'activate-preference-baseline':
         result = s.activate_preference_baseline(_read_grant_token(args.credential_file), args.expected_sha256)
     elif args.command == 'preference-manifest':

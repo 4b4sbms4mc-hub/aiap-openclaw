@@ -5,6 +5,7 @@ import json
 import ipaddress
 import socket
 
+from . import mirror_store
 from .contracts import Fault, canonical, digest, exact, require
 
 
@@ -50,20 +51,56 @@ def _supported_traits(traits, count):
     return [trait for trait in traits if len(trait['support']) >= 2]
 
 
-def render(service, token, space, events, generate):
+def render(service, token, space, events, generate, *, save=False):
     """Read an authorized snapshot before inference, then recheck before delivery."""
     with service.tx(read_only=True) as db:
         snapshot = _snapshot(service, db, token, space, events)
+        if save:
+            owner = service._grant(db, token)
+            service._allow(owner, [space], 'write', owner=True)
+            path = mirror_store.path_for(service, owner['avatar'], space)
+            previous = mirror_store.read(path)
     inputs = [{'event': event['event'], 'observations': [o['content'] for o in event['observations']]}
               for event in snapshot['events']]
     require(len(canonical(inputs)) <= 48000, 'E_MIRROR_INPUT_SIZE')
     traits = generate(inputs) if len(inputs) >= 2 else []
     traits = _supported_traits(traits, len(inputs))
-    with service.tx(read_only=True) as db:
+    with service.tx(read_only=not save) as db:
         current = _snapshot(service, db, token, space, events)
         require(current == snapshot, 'E_VERSION_CONFLICT', 409)
+        if save:
+            service._allow(service._grant(db, token), [space], 'write', owner=True)
+            require(mirror_store.read(path) == previous, 'E_VERSION_CONFLICT', 409)
+            mirror_store.write(path, {'events': events, 'source_sha256': digest(current), 'traits': traits})
     return {'profile': 'x-aiap-owner-mirror-v1', 'space_ref': space, 'source_sha256': digest(snapshot),
             'traits': traits, 'events': snapshot['events']}
+
+
+def saved(service, token, space, *, clear=False):
+    with service.tx(read_only=not clear) as db:
+        owner = service._grant(db, token)
+        service._allow(owner, [space], 'write' if clear else 'read', owner=True)
+        service._scope(db, owner, space)
+        path = mirror_store.path_for(service, owner['avatar'], space)
+        if clear:
+            # A new generation also cancels a first refresh still running outside the lock.
+            mirror_store.write(path, None)
+            return {'status': 'cleared', 'space_ref': space}
+        record = mirror_store.read(path)
+        if record is None or record['portrait'] is None:
+            return {'status': 'empty', 'space_ref': space}
+        portrait = record['portrait']
+        exact(portrait, ['events', 'source_sha256', 'traits'])
+        try:
+            snapshot = _snapshot(service, db, token, space, portrait['events'])
+        except Fault as error:
+            if error.code not in ('E_NOT_FOUND', 'E_VERSION_CONFLICT', 'E_MIRROR_EVENT_OVERLAP'):
+                raise
+            return {'status': 'stale', 'space_ref': space}
+        if digest(snapshot) != portrait['source_sha256']:
+            return {'status': 'stale', 'space_ref': space}
+        traits = _supported_traits(portrait['traits'], len(snapshot['events']))
+        return {'status': 'current', 'space_ref': space, 'traits': traits, 'events': snapshot['events']}
 
 
 def local_generator(model, port=1234, address='127.0.0.1'):

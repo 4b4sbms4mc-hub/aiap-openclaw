@@ -53,6 +53,53 @@ class ServiceTests(unittest.TestCase):
             return traits
         self.fault('E_IDENTITY', lambda: render(self.s, ephemeral['token'], space, ev, revoke))
 
+    def test_saved_mirror_is_private_and_does_not_change_runtime_inputs(self):
+        from aiap_core.mirror import render, saved
+        from aiap_core.procedural import list_descriptors
+        space = 'space:work'
+        ids = [self.add(text, level='M1') for text in ('First review', 'Second review')]
+        ev = [[dict(memory_id=mid, revision=1)] for mid in ids]
+        def runtime_inputs():
+            query = dict(space_refs=[space], purpose='work-task', query='review')
+            context = self.s.search(self.work, query, context=True)
+            # Request and view IDs change on every delivery.
+            view = context['authorized_view']
+            del view['view_id'], view['request_ref']
+            proposal = self.s.preflight_candidate(self.work, dict(space_ref=space, purpose='work-task',
+                text='Propose an independent observation', level='M1', memory_type='fact', trigger='user-request'))
+            return (context, self.s.search(self.work, query), proposal,
+                    list_descriptors(self.s, 'workflow', self.owner, space))
+        prior = runtime_inputs()
+        def refresh(statement):
+            return render(self.s, self.owner, space, ev, lambda _: [
+                dict(statement=statement, support=[1, 2], counterexamples=[])], save=True)
+        self.assertEqual(saved(self.s, self.owner, space)['status'], 'empty')
+        for statement in ('Private description', 'Updated description'):
+            before = self.s.db.read_bytes()
+            refreshed = refresh(statement)
+            self.assertEqual(self.s.db.read_bytes(), before)
+            self.assertEqual(saved(self.s, self.owner, space)['traits'], refreshed['traits'])
+            self.assertEqual(saved(self.s, self.owner, 'space:life')['status'], 'empty')
+            self.assertEqual(runtime_inputs(), prior)
+        self.fault('E_DENIED', lambda: saved(self.s, self.work, space))
+        self.fault('E_DENIED', lambda: saved(self.s, self.work, space, clear=True))
+        saved(self.s, self.owner, space, clear=True)
+        self.assertEqual(saved(self.s, self.owner, space)['status'], 'empty')
+        self.assertEqual(runtime_inputs(), prior)
+        refresh('Latest')
+        self.s.set_memory_validity(self.owner, space, ids[0], 1, expires_at=self.now.isoformat())
+        self.assertEqual(saved(self.s, self.owner, space), {'space_ref': space, 'status': 'stale'})
+
+    def test_mirror_clear_during_generation_prevents_late_save(self):
+        from aiap_core.mirror import render, saved
+        space = 'space:work'
+        ev = [[dict(memory_id=self.add(text, level='M1'), revision=1)] for text in ('First', 'Second')]
+        def generate(_):
+            saved(self.s, self.owner, space, clear=True)
+            return []
+        self.fault('E_VERSION_CONFLICT', lambda: render(self.s, self.owner, space, ev, generate, save=True))
+        self.assertEqual(saved(self.s, self.owner, space)['status'], 'empty')
+
     def test_preference_evidence_groups_retellings_and_preserves_exceptions(self):
         tokens = [self.work, self.s.issue_grant(['space:work'], 'work-task', 'second-runtime')['token']]
         ids = []
