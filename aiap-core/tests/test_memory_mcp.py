@@ -34,6 +34,7 @@ class MemoryAdmissionTests(unittest.IsolatedAsyncioTestCase):
         save_private(credential, json.dumps(grant).encode())
         args = SimpleNamespace(credential_file=credential, avatar_id=avatar,
                                space='space:general', purpose='aiap-memory', runtime='fixture')
+        self.args = args
         self.bound_service = self.core
         if self.local:
             args.data_dir = data
@@ -66,14 +67,200 @@ class MemoryAdmissionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((candidate['level'], candidate['type']), (level, kind))
             self.assertEqual(candidate['source']['source_type'], 'inferred')
             self.assertEqual(candidate['confidence'], 0.5)
-            before = (await self.call('aiap_memory_search', query=arguments['text']))['results']
+            search = await self.call('aiap_memory_search', query=arguments['text'])
+            self.assertEqual(search['retrieval_reason'], 'embedding-not-configured')
+            self.assertFalse(search['degraded'])
+            before = search['results']
             self.assertNotIn(candidate['memory_id'], [item['id'] for item in before])
             with self.assertRaises(Fault):
                 self.core.decide(self.adapter, delta, True)
             self.core.decide(self.owner, delta, True)
             found = (await self.call('aiap_memory_search', query=arguments['text']))['results'][0]
+            self.assertTrue(found['created_at'] and found['updated_at'] and found['last_verified_at'])
+            self.assertIsNone(found['last_used_at'])
+            self.assertEqual(found['confidence_basis'], 'proposal-reported')
+            self.assertEqual(found['source_ref'], candidate['source']['source_ref'])
             self.assertEqual((found['level'], found['memory_type'], found['source_type'], found['confidence']),
                              (level, kind, 'inferred', 0.5))
+
+    async def test_review_pairs_and_scoped_one_hop_links(self):
+        from aiap_core.client import proposal
+
+        def seed(text, token=self.adapter, space='space:general'):
+            env = proposal(self.core.session(token), space, text)
+            ref = 'evidence:weekly-report'
+            change = env['delta']['changes'][0]
+            change['candidate']['source']['source_ref'] = ref
+            change['evidence'] = [{'source_ref': ref}]
+            env['bindings'][0]['source_refs'] = [ref]
+            delta = self.core.propose(token, env)
+            self.core.decide(self.owner, delta['delta_id'], True)
+            return change['candidate']['memory_id']
+
+        first = seed('Send weekly report every Friday unless incident')
+        second = seed('Send weekly report every Friday except incident escalations')
+        other = self.core.issue_grant(['space:work'], 'aiap-memory', 'fixture')['token']
+        foreign = seed('Send weekly report every Friday', other, 'space:work')
+        before = self.core.db.read_bytes()
+        page = await self.call('aiap_memory_similar', memory_id=first)
+        pair, = page['suggestions']
+        self.assertEqual(pair['candidate']['memory_id'], second)
+        self.assertIn('unless incident', page['anchor']['content'])
+        self.assertIn('except incident escalations', pair['candidate']['content'])
+        self.assertEqual(page, await self.call('aiap_memory_similar', memory_id=first))
+        links = await self.call('aiap_memory_relations', memory_id=first)
+        edge, = links['edges']
+        self.assertEqual((edge['kind'], edge['other']['memory_id']), ('shared-evidence-reference', second))
+        with self.assertRaises(ToolError):
+            await self.call('aiap_memory_relations', memory_id=foreign)
+        self.assertEqual(before, self.core.db.read_bytes())
+        self.core.set_memory_validity(self.owner, 'space:general', first, 1, successor_id=second, successor_revision=1)
+        for ident, kind in ((first, 'superseded-by'), (second, 'supersedes')):
+            page = await self.call('aiap_memory_relations', memory_id=ident)
+            self.assertEqual({e['kind'] for e in page['edges']}, {kind, 'shared-evidence-reference'})
+            self.assertEqual([e['replacement_revision'] for e in page['edges'] if e['kind'] == kind], [1])
+
+    async def test_batch_partial_failure_and_retry(self):
+        args = dict(batch_id='import-one', items=[{'text':'Green orchard'}, {'text':''}])
+        before = self.core.db.read_bytes()
+        preview = (await self.call('aiap_memory_batch', **args))['results']
+        self.assertEqual([r['status'] for r in preview], ['ready-to-propose', 'error'])
+        duplicates = await self.call('aiap_memory_batch', batch_id='preview-duplicates',
+                                     items=[{'text':'Green orchard'}, {'text':'Green  orchard'}])
+        self.assertEqual(duplicates['results'][1]['first_index'], 0)
+        self.assertEqual(duplicates['results'][1]['status'], 'duplicate')
+        self.assertEqual(before, self.core.db.read_bytes())
+        sent = (await self.call('aiap_memory_batch', **args, submit=True))['results'][0]
+        self.core.decide(self.owner, sent['delta_id'], True)
+        retried = (await self.call('aiap_memory_batch', **args, submit=True))['results'][0]
+        self.assertEqual((retried['delta_id'], retried['status']), (sent['delta_id'], 'accepted'))
+        record, = (await self.call('aiap_memory_list'))['results']
+        edit = {'memory_id':record['id'], 'text':'Fresh crop', 'base_revision':record['revision']}
+        rows = (await self.call('aiap_memory_batch', batch_id='edit', submit=True,
+                                items=[{**edit, 'base_revision':99}, edit]))['results']
+        self.assertEqual(rows[0]['code'], 'E_VERSION_CONFLICT')
+        self.assertEqual(rows[1]['status'], 'proposed')
+
+    async def test_project_bindings_and_revocation(self):
+        from copy import copy
+        servers, grants = [], []
+        for slug in ('orchard', 'turbine'):
+            space = self.core.create_project_space(slug)['space_ref']
+            self.assertFalse(self.core.create_project_space(slug)['created'])
+            args = copy(self.args)
+            args.space = space
+            args.credential_file = self.core.db.parent / (slug + '.json')
+            grant = self.core.issue_grant([space], 'aiap-memory', 'fixture')
+            save_private(args.credential_file, json.dumps(grant).encode())
+            self.server = _server(_LocalCore(args) if self.local else _Core(args))
+            self.assertEqual((await self.call('aiap_memory_status'))['space_ref'], space)
+            draft = await self.call('aiap_memory_propose', text=slug)
+            owner = self.core.issue_grant([space], 'project-review', 'fixture-owner', role='owner')
+            self.core.decide(owner['token'], draft['delta_id'], True)
+            servers.append(self.server)
+            grants.append(grant)
+        for server, slug in zip(servers, ('orchard', 'turbine')):
+            self.server = server
+            items = (await self.call('aiap_memory_search', query=''))['results']
+            self.assertEqual([r['content'] for r in items], [slug])
+        self.core.revoke_grant(grants[1]['grant_id'])
+        with self.assertRaises(ToolError):
+            await self.call('aiap_memory_search', query='')
+
+    async def test_report_adoption_is_bound_to_delivered_version(self):
+        draft = await self.call('aiap_memory_propose', text='Orchard planted')
+        self.core.decide(self.owner, draft['delta_id'], True)
+        view = await self.call('aiap_memory_context', query='Orchard')
+        item, = view['items']
+        request = dict(view_id=view['view_id'], memory_id=item['id'], revision=item['revision'])
+        with self.assertRaises(ToolError):
+            await self.call('aiap_memory_report_adoption', **request)
+        await self.call('aiap_memory_ack_delivery', view_id=view['view_id'])
+        with self.assertRaises(ToolError):
+            await self.call('aiap_memory_report_adoption', **{**request, 'revision':item['revision'] + 1})
+        for retry in (False, True):
+            result = await self.call('aiap_memory_report_adoption', **request)
+            self.assertEqual(result['idempotent'], retry)
+        events = self.core.list_audit(self.owner, event='runtime-reported-adoption')['events']
+        self.assertEqual([e['object_id'] for e in events], [item['id']])
+
+    async def test_archive_request_keeps_memory_visible_until_owner_accepts(self):
+        initial = await self.call('aiap_memory_propose', text='Retired project milestone')
+        self.core.decide(self.owner, initial['delta_id'], True)
+        item, = (await self.call('aiap_memory_list'))['results']
+        req = await self.call('aiap_memory_propose_archive', memory_id=item['id'],
+                              base_revision=item['revision'], reason='Project closed')
+        self.assertEqual((await self.call('aiap_memory_list'))['results'], [item])
+        self.core.decide(self.owner, req['delta_id'], True, allow_lifecycle=True)
+        self.assertEqual((await self.call('aiap_memory_list'))['results'], [])
+        self.assertEqual((await self.call('aiap_memory_list', level='M3'))['results'][0]['id'], item['id'])
+
+    async def test_status_exposes_only_own_proposal_state(self):
+        lookup = 'aiap_memory_proposal_status'
+        for text, approve, final in [('Orchard harvest', True, 'accepted'), ('Turbine blades', False, 'rejected')]:
+            proposal = await self.call('aiap_memory_propose', text=text)
+            ident = proposal['delta_id']
+            self.assertEqual(await self.call(lookup, delta_id=ident), {'delta_id': ident, 'status': 'proposed'})
+            self.core.decide(self.owner, ident, approve)
+            self.assertEqual((await self.call(lookup, delta_id=ident))['status'], final)
+        other = self.core.issue_grant(['space:general'], 'aiap-memory', 'fixture')
+        replacement = self.core.db.parent / 'other-adapter.json'
+        save_private(replacement, json.dumps(other).encode())
+        replacement.replace(self.core.db.parent / 'adapter.json')
+        before = self.core.db.read_bytes()
+        for candidate in (ident, 'delta:missing'):
+            self.assertEqual((await self.call(lookup, delta_id=candidate))['status'], 'not-found')
+        self.assertEqual(before, self.core.db.read_bytes())
+
+    async def test_browse_pages_are_scoped_filtered_and_read_only(self):
+        texts = ['Orchard harvest window', 'Turbine blade dimensions']
+        for text in texts:
+            proposal = await self.call('aiap_memory_propose', text=text)
+            self.core.decide(self.owner, proposal['delta_id'], True)
+        await self.call('aiap_memory_propose', text='Pending shipyard schedule')
+        before = self.core.db.read_bytes()
+        self.assertTrue((await self.call('aiap_memory_status'))['memory_browse'])
+        filters = dict(level='M2', memory_type='fact', limit=1)
+        first = await self.call('aiap_memory_list', **filters)
+        self.assertTrue(first['next_after'])
+        last = await self.call('aiap_memory_list', after=first['next_after'], **filters)
+        self.assertIsNone(last['next_after'])
+        self.assertCountEqual([r['excerpt'] for r in first['results'] + last['results']], texts)
+        with self.assertRaises(ToolError):
+            await self.call('aiap_memory_list', level='M1', after=first['next_after'])
+        empty = await self.call('aiap_memory_list', updated_before='2000-01-01T00:00:00Z')
+        self.assertEqual(empty['results'], [])
+        self.assertEqual(before, self.core.db.read_bytes())
+
+    async def test_preview_is_scoped_and_read_only(self):
+        args = dict(text='Fixture owner preference', level='M2', memory_type='preference-evidence')
+        before = self.core.db.read_bytes()
+        result = await self.call('aiap_memory_preview', **args)
+        self.assertEqual(result['status'], 'ready-to-propose')
+        self.assertFalse(result['submitted'])
+        self.assertEqual(result['requested_classification']['memory_type'], args['memory_type'])
+        self.assertEqual(before, self.core.db.read_bytes())
+        created = await self.call('aiap_memory_propose', **args)
+        before = self.core.db.read_bytes()
+        result = await self.call('aiap_memory_preview', **args)
+        self.assertEqual((result['status'], result['delta_id']), ('duplicate', created['delta_id']))
+        self.assertEqual(before, self.core.db.read_bytes())
+        self.core.decide(self.owner, created['delta_id'], True)
+        before = self.core.db.read_bytes()
+        result = await self.call('aiap_memory_preview', **{**args, 'text': args['text'] + ' revised'})
+        self.assertEqual(result['status'], 'review-revision')
+        self.assertTrue(result['matches'])
+        self.assertEqual(before, self.core.db.read_bytes())
+
+        # A rotated credential for another space cannot preview through this binding.
+        other = self.core.issue_grant(['space:work'], 'aiap-memory', 'fixture')
+        replacement = self.core.db.parent / 'other-adapter.json'
+        save_private(replacement, json.dumps(other).encode())
+        replacement.replace(self.core.db.parent / 'adapter.json')
+        before = self.core.db.read_bytes()
+        with self.assertRaises(ToolError):
+            await self.call('aiap_memory_preview', **args)
+        self.assertEqual(before, self.core.db.read_bytes())
 
     async def test_checked_proposals_report_duplicates_and_related_records(self):
         status = await self.call('aiap_memory_status')
@@ -132,13 +319,17 @@ class MemoryAdmissionTests(unittest.IsolatedAsyncioTestCase):
         old_session = self.bound_service.session
 
         def legacy_session(token):
-            return {key: val for key, val in old_session(token).items() if key not in {'proposal_admission', 'proposal_revision'}}
+            return {key: val for key, val in old_session(token).items() if key not in {'proposal_admission', 'proposal_revision', 'memory_browse'}}
 
         with patch.object(self.bound_service, 'session', side_effect=legacy_session):
             self.assertEqual((await self.call('aiap_memory_status'))['proposal_admission'], 'legacy')
             with self.assertRaisesRegex(ToolError, 'E_PROPOSAL_REVISION_UNSUPPORTED'):
                 await self.call('aiap_memory_propose', text='Old Core revision request', trigger='user-request',
                                 memory_id='mem:fixture', base_revision=1)
+            with self.assertRaisesRegex(ToolError, 'E_PROPOSAL_PREVIEW_UNSUPPORTED'):
+                await self.call('aiap_memory_preview', text='Legacy preview')
+            with self.assertRaisesRegex(ToolError, 'E_MEMORY_BROWSE_UNSUPPORTED'):
+                await self.call('aiap_memory_list')
             result = await self.call('aiap_memory_propose', text='Legacy grant scenario')
             self.assertEqual(result['status'], 'proposed')
             review = self.core.review(self.owner, result['delta_id'], changes=True)
@@ -199,6 +390,8 @@ class InstalledLocalMCPTests(unittest.IsolatedAsyncioTestCase):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     results = (await call(session, 'aiap_memory_search', {'query': query}))['results']
+                    page = await call(session, 'aiap_memory_list', {'level': 'M1'})
+                    self.assertEqual([r['excerpt'] for r in page['results']], [query])
                     self.assertEqual([(r['content'], r['level']) for r in results], [(query, 'M1')])
 
     @unittest.skipUnless(os.name == 'nt', 'Windows ACLs')

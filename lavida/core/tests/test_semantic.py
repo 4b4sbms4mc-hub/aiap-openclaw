@@ -23,6 +23,109 @@ class SemanticTests(unittest.TestCase):
         self.setup_engine();mid=self.add('我出差乘坐商务舱');self.add('pottery')
         r=self.query();self.assertEqual([x['memory_id'] for x in r['items']],[mid]);self.assertEqual(r['retrieval'],'scoped-hybrid-cosine')
         self.sent.clear();self.query();self.assertEqual(len(self.sent),1)
+    def test_owner_preference_search_authorizes_before_embedding_and_on_fallback(self):
+        self.setup_engine()
+        def evidence(text, sid='space:work', token=None):
+            env = self.draft(text, space=sid, token=token, level='M1', source_type='observed')
+            candidate = env['delta']['changes'][0]['candidate']
+            candidate['type'] = 'preference-evidence'
+            self.s.decide(self.owner, self.s.propose(token or self.work, env)['delta_id'], True)
+            return candidate['memory_id']
+        first = evidence('我出差时希望提前订票')
+        opposite = evidence('这次出差希望晚些订票')
+        evidence('life travel private', 'space:life', self.life)
+        self.add('work travel fact', level='M1')
+        self.add('travel standing instruction')
+        def lookup(token, query):
+            return self.s.find_preference_evidence(token, 'space:work', query)
+        before = self.s.db.read_bytes()
+        self.fault('E_DENIED', lambda: lookup(self.work, 'travel'))
+        self.assertFalse(self.sent)
+        result = lookup(self.owner, 'travel')
+        self.assertEqual({m['memory_id'] for m in result['items']}, {first, opposite})
+        self.assertEqual(set(self.sent[1:]), {'我出差时希望提前订票', '这次出差希望晚些订票'})
+        self.assertEqual(result['retrieval_reason'], 'hybrid-ranked')
+        self.assertEqual([item['match_ranks'] for item in result['items']], [{'semantic': 1}, {'semantic': 2}])
+        both = lookup(self.owner, '出差')
+        self.assertTrue(all(set(item['match_ranks']) == {'semantic', 'lexical'} for item in both['items']))
+        def unavailable(*args):
+            raise ProviderUnavailable('E_EMBED_UNAVAILABLE')
+        self.engine.embed = unavailable
+        fallback = lookup(self.owner, '出差')
+        self.assertTrue(fallback['degraded'])
+        self.assertEqual([m['match_ranks'] for m in fallback['items']], [{'lexical': 1}, {'lexical': 2}])
+        self.assertEqual({m['memory_id'] for m in fallback['items']}, {first, opposite})
+        self.assertFalse(lookup(self.owner, 'travel')['items'])
+        self.s.semantic = None
+        self.assertEqual(lookup(self.owner, '出差')['retrieval_reason'], 'embedding-not-configured')
+        self.assertEqual(before, self.s.db.read_bytes())
+
+    def test_disabling_embedding_scope_during_evidence_query_stops_delivery(self):
+        self.setup_engine()
+        env = self.draft('Private source text', level='M1', source_type='observed')
+        env['delta']['changes'][0]['candidate']['type'] = 'preference-evidence'
+        self.s.decide(self.owner, self.s.propose(self.work, env)['delta_id'], True)
+        def disable(texts, deadline):
+            self.sent.extend(texts)
+            self.engine.scopes.clear()
+            return [[1., 0.] for _ in texts]
+        self.engine.embed = disable
+        self.fault('E_SEARCH_STATE_CHANGED', lambda: self.s.find_preference_evidence(
+            self.owner, 'space:work', 'release'))
+        self.assertEqual(len(self.sent), 1)
+        self.assertNotIn('Private source text', self.sent)
+        # The next request uses scoped lexical fallback.
+        result = self.s.find_preference_evidence(self.owner, 'space:work', 'source')
+        self.assertEqual(result['retrieval_reason'], 'scope-not-enabled')
+        self.assertEqual(result['items'][0]['match_ranks'], {'lexical': 1})
+
+    def test_project_semantic_recall_across_200_record_boundary(self):
+        import copy
+        self.setup_engine()
+        space = self.s.create_project_space('expense-review')['space_ref']
+        token = self.s.issue_grant([space], 'expenses', 'project')['token']
+        self.s.semantic = Semantic('http://127.0.0.1:1', [space], dimensions=2)
+        self.s.semantic.embed = lambda texts, deadline: self.engine.embed(
+            [t.replace('商旅交通', 'travel') for t in texts], deadline)
+        self.owner = self.s.issue_grant([space], 'project-review', 'owner', role='owner')['token']
+        target = self.add('我出差乘坐商务舱', space=space, token=token)
+        request = {'space_refs':[space], 'purpose':'expenses', 'query':'商旅交通', 'limit':20}
+        avatar = self.s.session(token)['avatar_id']
+        seed = self.s.memory_for_update(token, space, target, 1)
+        for start, end in [(0, 199), (199, 200), (200, 999)]:
+            with self.s.tx() as c:
+                for k in range(start, end):
+                    m = copy.deepcopy(seed)
+                    m.update(memory_id=f'mem:fixture-{k}', content=f'陶器编号{k}')
+                    c.execute('INSERT INTO memories VALUES(?,?,?,?,?)',
+                              (avatar, m['memory_id'], space, 1, json.dumps(m)))
+            result = self.s.search(token, request)
+            self.assertFalse(result['degraded'])
+            self.assertEqual(result['fusion'], 'reciprocal-rank')
+            self.assertEqual([r['memory_id'] for r in result['items']], [target])
+        self.fault('E_EMBED_CONFIG', lambda: Semantic('http://localhost', ['space:project:*']))
+
+    def test_fusion_can_recall_partial_terms_below_vector_threshold(self):
+        self.setup_engine()
+        sem = self.add('出差乘坐商务舱')
+        lex = self.add('Project ORCHARD schedule')
+        self.add('unrelated record')
+        r = self.query('ORCHARD travel')
+        self.assertEqual({i['memory_id'] for i in r['items']}, {sem, lex})
+        self.assertEqual(r['lexical_retrieval'], 'scoped-offline-bm25')
+
+    def test_retrieval_diagnostics(self):
+        self.assertEqual(self.query()['retrieval_reason'], 'embedding-not-configured')
+        self.setup_engine()
+        self.assertEqual(self.query()['retrieval_reason'], 'no-eligible-records')
+        self.add('我出差乘坐商务舱')
+        self.assertEqual(self.query('')['retrieval_reason'], 'empty-query')
+        self.assertFalse(self.sent)
+        self.assertEqual(self.query()['retrieval_reason'], 'hybrid-ranked')
+        self.assertTrue(any('travel' in text for text in self.sent))
+        self.engine.scopes.clear()
+        self.assertEqual(self.query()['retrieval_reason'], 'scope-not-enabled')
+
     def test_scope_filter_before_provider(self):
         self.setup_engine();self.add('work travel');self.add('SECRET travel',space='space:life',token=self.life)
         self.query();self.assertNotIn('SECRET',str(self.sent))
@@ -38,13 +141,29 @@ class SemanticTests(unittest.TestCase):
     def test_provider_failure_explicit_fallback(self):
         self.setup_engine();self.add('work travel')
         def down(*a):raise ProviderUnavailable('E_EMBED_UNAVAILABLE')
-        self.engine.embed=down;r=self.query();self.assertTrue(r['degraded']);self.assertEqual(r['retrieval'],'scoped-offline-bm25');self.assertEqual(len(r['items']),1)
+        self.engine.embed=down;r=self.query();self.assertTrue(r['degraded']);self.assertEqual(r['retrieval_reason'],'embedding-unavailable');self.assertEqual(r['retrieval'],'scoped-offline-bm25');self.assertEqual(len(r['items']),1)
     def test_revocation_during_embedding_no_result(self):
         self.setup_engine();self.add('work travel');grant=self.s.session(self.work)['auth_evidence_ref']
         original=self.engine.embed
         def revoke(*args):
             r=original(*args);self.s.revoke_grant(grant);return r
         self.engine.embed=revoke;self.fault('E_IDENTITY',lambda:self.query())
+    def test_expiry_during_embedding_rechecks_before_sending_record(self):
+        from datetime import timedelta
+        self.setup_engine()
+        ident = self.add('work travel')
+        deadline = self.now + timedelta(seconds=1)
+        self.s.set_memory_validity(self.owner, 'space:work', ident, 1, expires_at=deadline.isoformat())
+        original = self.engine.embed
+        def advance(texts, timeout):
+            result = original(texts, timeout)
+            self.now = deadline
+            return result
+        self.engine.embed = advance
+        self.fault('E_SEARCH_STATE_CHANGED', self.query)
+        self.assertNotIn('work travel', self.sent)
+        self.assertEqual(self.query()['items'], [])
+
     def test_content_change_during_embedding(self):
         self.setup_engine();mid=self.add('work travel');original=self.engine.embed
         def change(*args):

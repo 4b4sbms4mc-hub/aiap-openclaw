@@ -26,7 +26,7 @@ pytest
 
 ### Fresh DSH installation with a local Core
 
-Download both wheels and `SHA256SUMS-MCP.txt` from [AIAP Memory MCP 0.3.6](https://github.com/4b4sbms4mc-hub/aiap-openclaw/releases/tag/aiap-mcp-v0.3.6). Use Python 3.12 and run the commands from the download directory.
+Download both wheels and `SHA256SUMS-MCP.txt` from [AIAP Memory MCP 0.3.7](https://github.com/4b4sbms4mc-hub/aiap-openclaw/releases/tag/aiap-mcp-v0.3.7). Use Python 3.12 and run the commands from the download directory.
 
 On macOS and Linux:
 
@@ -35,7 +35,7 @@ shasum -a 256 -c SHA256SUMS-MCP.txt
 VENV="$HOME/.local/share/aiap-dsh/venv"
 DATA="$HOME/.local/share/aiap-dsh/core"
 python3.12 -m venv "$VENV"
-"$VENV/bin/python" -m pip install ./aiap_core_service-0.2.2-py3-none-any.whl './aiap_reference-0.3.6-py3-none-any.whl[mcp]'
+"$VENV/bin/python" -m pip install ./aiap_core_service-0.2.3-py3-none-any.whl './aiap_reference-0.3.7-py3-none-any.whl[mcp]'
 "$VENV/bin/python" -m aiap_core --data-dir "$DATA" init
 "$VENV/bin/python" -m aiap_core --data-dir "$DATA" grant --spaces space:general \
   --purpose aiap-memory --runtime deepseek-harness --output "$DATA/adapter.json"
@@ -48,7 +48,7 @@ $Venv = Join-Path $env:LOCALAPPDATA 'AIAP\venv'
 $Data = Join-Path $env:LOCALAPPDATA 'AIAP\core'
 py -3.12 -m venv $Venv
 $Python = Join-Path $Venv 'Scripts\python.exe'
-& $Python -m pip install .\aiap_core_service-0.2.2-py3-none-any.whl '.\aiap_reference-0.3.6-py3-none-any.whl[mcp]'
+& $Python -m pip install .\aiap_core_service-0.2.3-py3-none-any.whl '.\aiap_reference-0.3.7-py3-none-any.whl[mcp]'
 & $Python -m aiap_core --data-dir $Data init
 & $Python -m aiap_core --data-dir $Data grant --spaces space:general --purpose aiap-memory --runtime deepseek-harness --output (Join-Path $Data 'adapter.json')
 ```
@@ -70,7 +70,7 @@ For Owner commands in Windows PowerShell, use `& $Python` as the executable and 
 
 #### macOS system embeddings
 
-On macOS, install the Core wheel with the optional bridge using `"$VENV/bin/python" -m pip install './aiap_core_service-0.2.2-py3-none-any.whl[system-embedding]'`.
+On macOS, install the Core wheel with the optional bridge using `"$VENV/bin/python" -m pip install './aiap_core_service-0.2.3-py3-none-any.whl[system-embedding]'`.
 On macOS 14 or later, add `--system-embedding-language zh-Hans` to the local MCP server arguments, or set `AIAP_SYSTEM_EMBED_LANG=zh-Hans` and `AIAP_EMBED_SPACES=space:general` on a standalone Core server. Use the locale that best matches the indexed space. An explicit HTTP embedding endpoint takes precedence in the standalone server.
 
 Run `aiap embedding status --language zh-Hans` to check whether the system model is available. If Apple reports missing assets, the MCP status and degraded search include the command `aiap embedding download --language zh-Hans`. This command asks macOS to download its own assets. Searches use offline BM25 while the system model is unavailable.
@@ -79,7 +79,21 @@ The active model and revision identify the vector representation. The backend po
 
 To enable hybrid semantic retrieval in local mode, add `--embedding-url http://127.0.0.1:1234 --embedding-model qwen3-embedding-0.6b` to the MCP command arguments, with the origin and model ID from your trusted local OpenAI-compatible embedding server. The server receives the query and approved memory text from the adapter's authorized space. Use `--embedding-dimensions` if the model's vector size differs from 1024. Search results report `retrieval`, `embedding_model` and any `semantic_unavailable` reason. With embeddings disabled or unavailable, Core prioritizes exact substrings and ranks additional matches with SQLite FTS5 BM25 over Chinese character pairs and word tokens. The in-memory index is built from eligible records in the authorized space for the current query. SQLite builds without FTS5 retain exact substring matching.
 
+Search reports the actual retrieval method for the request. On a Core with retrieval diagnostics, `retrieval_reason` distinguishes `hybrid-ranked`, `embedding-not-configured`, `scope-not-enabled`, `empty-query`, `no-eligible-records`, and `embedding-unavailable`. A provider failure sets `degraded` to true and supplies its error code in `semantic_unavailable`. When an older Core omits a diagnostic, MCP returns null for that field.
+
+### Browse approved memories
+
+To suggest archiving a memory, call `aiap_memory_propose_archive` with its ID, current revision, and reason. The Owner reviews the request and decides through the local Core CLI. After approval, the memory appears under M3.
+
+After submission, call `aiap_memory_proposal_status` with the returned `delta_id`. The issuing adapter can see `proposed`, `accepted`, `rejected`, or `invalidated` in its bound space. An unknown or inaccessible ID returns `not-found`; a preview creates no submission. Owner decisions use the existing local review and decide commands.
+
+Search results expose the source reference, proposal-reported confidence, creation and update timestamps, last verification and last recorded use. A missing timestamp is null. MCP-created inferred proposals default to 0.5. This value is supplied by the proposal; it is not a calibrated probability. Core's verification time records Owner approval or verification of the record, not independent verification of its source.
+
+Call `aiap_memory_list` to browse the bound space without a query. Use `level` (M1/M2 by default, M3 explicitly), `memory_type`, `updated_from` (inclusive), and `updated_before` (exclusive). Times require an offset. Pass `next_after` as `after` with the same filters until it is null. Results contain up to 240 characters of text per memory. Each page reflects current authorizations and records; newly matching IDs before the cursor appear on a fresh traversal. Check `memory_browse` in status for Core support.
+
 ### Candidate preflight
+
+Use the read-only MCP tool `aiap_memory_preview` to check a new candidate in the bound space before submission. It returns the requested classification and the Core admission decision, including visible duplicate or revision matches. On older Core versions it reports `E_PROPOSAL_PREVIEW_UNSUPPORTED`.
 
 Before submitting a candidate, call Core `POST /v1/deltas/preflight` with an Adapter or Owner grant that can read and write the selected space. The operator can also pass the same JSON on stdin to `python -m aiap_core --data-dir "$DATA" preflight-candidate --credential-file "$DATA/adapter.json"`.
 
@@ -107,7 +121,7 @@ La Vida's opt-in automatic capture uses checked submission with the host-observa
 
 Automatic proposals use an optional DSH host plugin alongside the Memory MCP. This release supports the audited DSH Desktop 0.2.2-rc.5 SessionController and disables capture on unknown host versions. It leaves the signed DSH application files untouched. The standard Memory MCP remains available independently.
 
-1. Download `dsh-aiap-capture-0.3.6.tar.gz`, `SHA256SUMS-MCP.txt`, and `install-dsh-capture.sh` from the [release](https://github.com/4b4sbms4mc-hub/aiap-openclaw/releases/tag/aiap-mcp-v0.3.6). Open a terminal in the download directory.
+1. Download `dsh-aiap-capture-0.3.6.tar.gz`, `SHA256SUMS-MCP.txt`, and `install-dsh-capture.sh` from the [release](https://github.com/4b4sbms4mc-hub/aiap-openclaw/releases/tag/aiap-mcp-v0.3.7). Open a terminal in the download directory.
 2. On macOS, run the installer. For a different DSH profile, pass its path as the second argument.
 
    ```sh
@@ -205,3 +219,11 @@ AIAP is designed to interoperate with MCP and A2A through adapters rather than r
 - Code, Schemas, SDK/reference implementation: Apache-2.0
 - Whitepaper/specification documentation: CC BY 4.0
 - AIAP / AI Avatar Protocol names and logos: separate trademark policy
+
+Search is read-only. For explicit feedback, retrieve a view with `aiap_memory_context`, call `aiap_memory_ack_delivery` after delivery, and call `aiap_memory_report_adoption` only for versions actually used. Report the version returned by the view. A retry within the view lifetime is idempotent. The Owner can filter the audit by `runtime-reported-adoption`. This is the runtime's own report.
+
+For isolated projects, run the local Core operator command `project-space orchard`, issue a single-space adapter grant for `space:project:orchard`, and configure that project's MCP server with the matching credential and `--space space:project:orchard`. Issue a separate Owner grant for local review. Select the matching server in the runtime's project or session configuration. Repeat with a separate space and credential for other projects. Revoking a grant affects subsequent calls. Network sync for project spaces is outside the local feature.
+
+Use `aiap_memory_batch` for up to 20 user-requested adds or revisions. Preview is read-only and compares each row against the current Core. Submission commits eligible rows individually and reports row indices. On interruption retry with the same batch ID, credential and identical rows. Reordering rows preserves their proposal IDs. Changed row content constitutes a new request. Every proposal still requires Owner approval.
+
+For a consolidation review, `aiap_memory_similar` compares an approved record with other current records of the same level and type. Exact text and term overlap produce suggestions. Both texts and source references are returned so the reviewer can keep exceptions and conditions. No changes are submitted. `aiap_memory_relations` lists direct same-space replacements in either direction and records citing the same evidence reference. Replacement edges carry the revision at which the replacement was selected. Removed or inaccessible targets are omitted. The limit applies to direct edges or suggestions, with `possibly_more` when the cap truncates results.

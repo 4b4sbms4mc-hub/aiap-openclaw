@@ -3,6 +3,7 @@ Wang Lu. Request authorization is resolved inside each SQLite transaction.
 """
 import sqlite3,json,secrets,hashlib,os,uuid,copy
 import re
+import hmac
 import stat
 from pathlib import Path
 from contextlib import contextmanager
@@ -42,6 +43,9 @@ _PROPOSAL_SCOPES_VISIBLE = '''NOT EXISTS (
         SELECT 1 FROM json_each(:allowed) AS allowed WHERE allowed.value = scope.value
     )
 )'''
+_BASE_EXTENSION = {'namespace': 'x-aiap-core-profile', 'version': '0.1-draft', 'critical': True}
+_PREFERENCE_EXTENSION = {'namespace': 'x-aiap-local-preference-index', 'version': '1', 'critical': True}
+_PREFERENCE_REF_PREFIX = 'preference-manifest:'
 _COMPACT_CORE_PROFILE = 'x-aiap-local-compact-core-v1'
 _SPACE_MANIFEST_PROFILE = 'x-aiap-local-space-manifest-v1'
 _SUMMARY_SELECTION_FILE = 'profile-summary-selections.json'
@@ -54,6 +58,10 @@ LOCAL_LIFECYCLE_TRANSITIONS = {
     'reactivate': (('M3',), 'M1', 'memory-reactivated'),
     'archive': (('M1', 'M2'), 'M3', 'memory-archived'),
 }
+
+VALIDITY_EXTENSION = 'x-aiap-memory-validity-v1'
+
+DECISION_REASONS = ('owner-confirmed', 'duplicate', 'outdated', 'incorrect', 'insufficient-evidence', 'out-of-scope')
 
 class Service:
     def __init__(self,data_dir,clock=None,*,enable_semantic=True):
@@ -109,12 +117,28 @@ class Service:
         ident=uid('audit:');c.execute('INSERT INTO audit VALUES(?,?,?,?,?,?,?)',(ident,av,space,event,obj,stamp(self.now()),actor));return ident
     def _rebuild_core(self,c,av):
         row=c.execute('SELECT * FROM cores WHERE avatar=?',(av,)).fetchone();require(row is not None,'E_DENIED',403)
+        extras = []
+        extensions = [_BASE_EXTENSION]
+        expected_key = None
+        if row['revision']:
+            previous, enrollment = self._load_signed_core(c, av)
+            extensions = previous['extensions']
+            expected_key = enrollment['payload']['avatar_public_key']
+            if extensions != [_BASE_EXTENSION]:
+                commitments = self._preference_references(previous)
+                for sid, ref in commitments.items():
+                    scope = self._scope(c, {'avatar': av, 'subject': previous['owner']['owner_ref']}, sid)
+                    self._check_preference_ref(c, previous, scope, commitments)
+                    extras.append(ref)
         refs=[]
         for r in c.execute('SELECT body FROM memories WHERE avatar=? ORDER BY id',(av,)):
             m=json.loads(r['body']);refs.append({'id':m['memory_id'],'version':m['revision'],'scope':m['scope'],'sha256':digest(m)})
+        if extensions != [_BASE_EXTENSION]:
+            require(all(not ref['id'].startswith(_PREFERENCE_REF_PREFIX) for ref in refs), 'E_INTEGRITY', 500)
+        refs.extend(extras)
         n=row['revision']+1
-        core={'aiap_version':'0.4.2','profile_version':'0.1-draft','avatar_id':av,'owner':{'owner_ref':row['owner'],'owner_key_ref':'local-key:owner','avatar_key_ref':'local-key:avatar'},'revision':n,'previous_revision':n-1 if n>1 else None,'identity_refs':['local-identity:enrollment'],'profile_summary':[],'state_index':refs,'procedural_index':[],'extensions':[{'namespace':'x-aiap-core-profile','version':'0.1-draft','critical':True}],'updated_at':stamp(self.now())}
-        self._sign_core(core, 'x-aiap-local-ed25519-json-v1', b'AIAP-LOCAL-CORE-v1\x00')
+        core={'aiap_version':'0.4.2','profile_version':'0.1-draft','avatar_id':av,'owner':{'owner_ref':row['owner'],'owner_key_ref':'local-key:owner','avatar_key_ref':'local-key:avatar'},'revision':n,'previous_revision':n-1 if n>1 else None,'identity_refs':['local-identity:enrollment'],'profile_summary':[],'state_index':refs,'procedural_index':[],'extensions':extensions,'updated_at':stamp(self.now())}
+        self._sign_core(core, 'x-aiap-local-ed25519-json-v1', b'AIAP-LOCAL-CORE-v1\x00', expected_public_key=expected_key)
         validate('avatar-core',core);c.execute('UPDATE cores SET revision=?,body=? WHERE avatar=?',(n,encode(core),av))
 
     def _sign_core(self, core, profile, domain, *, expected_public_key=None):
@@ -141,6 +165,21 @@ class Service:
             Ed25519PublicKey.from_public_bytes(unb64(p['avatar_public_key'])).verify(unb64(proof['proofs'][0]['signature']),b'AIAP-LOCAL-CORE-v1\x00'+raw)
             return True
         except Exception:return False
+    def create_project_space(self, slug):
+        """Local operator operation. Creating a space never expands existing grants."""
+        require(isinstance(slug, str) and re.fullmatch(r'[a-z0-9][a-z0-9-]{0,62}', slug))
+        space = 'space:project:' + slug
+        with self.tx() as connection:
+            avatar = self.meta(connection, 'avatar')
+            row = connection.execute('SELECT kind FROM spaces WHERE avatar=? AND id=?', (avatar, space)).fetchone()
+            if row:
+                require(row['kind'] == 'project', 'E_SCOPE', 409)
+                return {'space_ref': space, 'created': False}
+            connection.execute('INSERT INTO spaces VALUES(?,?,?,?,?)',
+                               (avatar, space, 'project', 'policy:project:' + slug, 1))
+            self._audit(connection, avatar, space, 'project-space-created', space, 'local-operator')
+            return {'space_ref': space, 'created': True}
+
     def issue_grant(self,scopes,purpose,runtime,role='adapter',days=7):
         # Local operator command only; never exposed over HTTP.
         require(names(scopes) and isinstance(purpose,str) and 0<len(purpose)<=200 and isinstance(runtime,str) and 0<len(runtime)<=200)
@@ -264,8 +303,14 @@ class Service:
         with self.tx(read_only=True) as c:
             g=self._grant(c,token);scopes=json.loads(g['scopes'])
             result = {'avatar_id':g['avatar'],'subject_ref':g['subject'],'role':g['role'],'runtime_ref':g['runtime'],'session_ref':g['session'],'auth_evidence_ref':g['id'],'purpose':g['purpose'],'space_refs':scopes,'scopes':[self._scope(c,g,s) for s in scopes],'issued_at':g['issued'],'expires_at':g['expires'],'actions':json.loads(g['actions']),'retrieval':('scoped-hybrid-cosine' if self.semantic and set(scopes)<=self.semantic.scopes else lexical.METHOD)}
+            result['memory_browse'] = 'cursor-v1'
             result['proposal_admission'] = 'checked-v1'
             result['proposal_revision'] = True
+            result['proposal_status'] = 'issuer-v1'
+            result['archive_proposal'] = True
+            result['context_feedback'] = True
+            result['proposal_batch'] = True
+            result['memory_links'] = True
             if self.semantic and set(scopes) <= self.semantic.scopes:
                 if setup := getattr(self.semantic, 'setup', None):
                     result['embedding_setup'] = setup()
@@ -303,7 +348,7 @@ class Service:
         memory = json.loads(row['body'])
         require(memory['scope'] == ref['scope'] == self._scope(connection, owner, space)
                 and digest(memory) == ref['sha256'], 'E_INTEGRITY', 500)
-        require(memory['status'] == 'active' and memory['level'] == 'M2' and memory['retention']['pinned']
+        require(self.current_memory(memory) and memory['level'] == 'M2' and memory['retention']['pinned']
                 and isinstance(memory['content'], str) and len(memory['content']) <= 1024,
                 'E_SUMMARY_SOURCE', 409)
         return memory['content']
@@ -400,8 +445,11 @@ class Service:
                                                           for ident in summary_ids))
             selected = set(summary_ids)
             require(len(selected) == len(summary_ids))
-            require(core['extensions'] == [{'namespace': 'x-aiap-core-profile', 'version': '0.1-draft', 'critical': True}],
-                    'E_CRITICAL_EXTENSION')
+            preference_refs = {}
+            indexed_preferences = core['extensions'] != [_BASE_EXTENSION]
+            if indexed_preferences:
+                preference_refs = self._preference_references(core)
+                require(set(preference_refs) <= set(spaces), 'E_INTEGRITY', 500)
             require(core['profile_summary'] == [] and core['procedural_index'] == [], 'E_OPERATION_UNSUPPORTED')
             if space is not None:
                 require(space in spaces, 'E_SCOPE', 403)
@@ -410,10 +458,21 @@ class Service:
             manifests = {sid: {'profile': _SPACE_MANIFEST_PROFILE, 'avatar_id': core['avatar_id'],
                                'core_revision': core['revision'], 'scope': self._scope(connection, owner, sid),
                                'entries': []} for sid in spaces}
+            if indexed_preferences:
+                for sid, manifest in manifests.items():
+                    if sid in preference_refs:
+                        self._check_preference_ref(connection, core, manifest['scope'], preference_refs)
+                        manifest['preference_manifest'] = preference_refs[sid]
+                    else:
+                        require(self._preference_manifest(connection, core['avatar_id'], manifest['scope'])['record_count'] == 0,
+                                'E_INTEGRITY', 500)
+                    manifest['profile'] = 'x-aiap-local-space-manifest-v2'
             summaries = {}
             for ref in core['state_index']:
                 manifest = manifests.get(ref['scope']['space_ref'])
                 require(manifest is not None and ref['scope'] == manifest['scope'], 'E_SCOPE', 409)
+                if indexed_preferences and ref['id'].startswith(_PREFERENCE_REF_PREFIX):
+                    continue
                 manifest['entries'].append(ref)
                 sid = ref['scope']['space_ref']
                 selection = saved.get(sid)
@@ -444,12 +503,101 @@ class Service:
                 result['stale_summary_spaces'] = sorted(stale)
             return result
 
+    def list_memories(self, token, body):
+        """Keyset page of currently authorized records, ordered by immutable ID."""
+        from .admission import MEMORY_TYPES
+
+        exact(body, ['space_ref', 'purpose'], ['level', 'memory_type', 'updated_from', 'updated_before', 'after', 'limit', 'validity'])
+        space, purpose = body['space_ref'], body['purpose']
+        require(isinstance(purpose, str) and bool(purpose))
+        level = body.get('level')
+        kind = body.get('memory_type')
+        state = body.get('validity', 'current')
+        require(state in ('current', 'expired', 'superseded'))
+        default_levels = ('M1', 'M2') if state == 'current' else ('M1', 'M2', 'M3')
+        require('level' not in body or level in ('M1', 'M2', 'M3'))
+        require('memory_type' not in body or kind in MEMORY_TYPES)
+        limit = body.get('limit', 20)
+        require(type(limit) is int and 1 <= limit <= 100)
+
+        def timestamp(field):
+            if field not in body:
+                return None
+            value = body[field]
+            require(isinstance(value, str) and len(value) <= 40 and 'T' in value)
+            try:
+                dt = parse(value)
+                require(dt.tzinfo is not None)
+                return stamp(dt)
+            except (ValueError, OverflowError):
+                raise Fault('E_SCHEMA') from None
+
+        start, end = timestamp('updated_from'), timestamp('updated_before')
+        require(not (start and end) or start < end)
+        with self.tx(read_only=True) as connection:
+            grant = self._grant(connection, token)
+            self._allow(grant, [space], 'read', purpose, owner=state != 'current')
+            scope = self._scope(connection, grant, space)
+            now = self.now()
+            cursor_domain = 'memory-list-v1' if state == 'current' else 'memory-list-v1:' + state
+            def cursor_tag(memory_id):
+                message = canonical([cursor_domain, grant['avatar'], grant['id'], scope,
+                                     purpose, level, kind, start, end, memory_id])
+                return hmac.digest(token.encode(), message, 'sha256').hex()
+
+            after = ''
+            if 'after' in body:
+                cursor = body['after']
+                require(isinstance(cursor, str) and 0 < len(cursor) <= 512, 'E_CURSOR')
+                tag, separator, after = cursor.partition('.')
+                require(separator and after and re.fullmatch('[0-9a-f]{64}', tag)
+                        and hmac.compare_digest(tag, cursor_tag(after)), 'E_CURSOR')
+            rows = connection.execute(
+                'SELECT body FROM memories WHERE avatar=? AND space=? AND id>? ORDER BY id',
+                (grant['avatar'], space, after))
+            items = []
+            next_after = None
+            for row in rows:
+                memory = json.loads(row['body'])
+                if memory['scope'] != scope or self._memory_validity(memory, now) != state:
+                    continue
+                if memory['level'] not in ((level,) if level else default_levels):
+                    continue
+                if kind and memory['type'] != kind:
+                    continue
+                updated = stamp(parse(memory['updated_at']))
+                if (start and updated < start) or (end and updated >= end):
+                    continue
+                if len(items) == limit:
+                    last = items[-1]['memory_id']
+                    next_after = cursor_tag(last) + '.' + last
+                    break
+                item = {key: memory[key] for key in ('memory_id', 'revision', 'level', 'type', 'updated_at')}
+                item['scope'] = scope
+                if state != 'current':
+                    item['validity'] = memory.get('extensions', {}).get(VALIDITY_EXTENSION, {})
+                item['excerpt'] = memory['content'][:240]
+                items.append(item)
+            return {'space_ref': space, 'items': items, 'next_after': next_after}
+
     def search(self,token,body,context=False):
         if self.semantic is not None and not context:
             from .semantic import semantic_search
             return semantic_search(self,token,body)
-        return self._literal_search(token,body,context)
+        result = self._literal_search(token, body, context)
+        result.update(retrieval_reason="context-lexical" if context else "embedding-not-configured", degraded=False)
+        return result
     def _literal_search(self,token,body,context=False):
+        condition = None
+        override = False
+        if context and isinstance(body, dict):
+            body = body.copy()
+            if 'preference_condition' in body:
+                condition = body.pop('preference_condition')
+                require(isinstance(condition, str) and condition.strip() and len(condition) <= 2000)
+                require(isinstance(body.get('space_refs'), list) and len(body['space_refs']) == 1)
+            override = body.pop('skip_preferences', False)
+            require(type(override) is bool)
         levels = search_levels(body)
         limit = body.get('limit', 20)
         with self.tx() as c:
@@ -460,7 +608,7 @@ class Service:
             result=[]
             for row in rows:
                 m=json.loads(row[0])
-                if m['status']!='active' or m['level'] not in levels:continue
+                if not self.current_memory(m) or m['level'] not in levels:continue
                 if m['scope']!=self._scope(c,g,m['scope']['space_ref']):continue
                 result.append(m)
                 if not body['query'] and len(result) > limit:
@@ -468,8 +616,16 @@ class Service:
             result, more, method = lexical.rank(result, body['query'], limit)
             out={'items':result,'count':len(result),'retrieval':method,'space_refs':scopes,'possibly_more':more}
             if context:
+                if condition is not None:
+                    defaults = {'preferences': [], 'possibly_more': False}
+                    if not override and 'M2' in levels:
+                        defaults = self._matching_preferences(c, g, scopes[0], condition, limit)
+                    out['preference_defaults'] = defaults['preferences']
+                    out['possibly_more_preferences'] = defaults['possibly_more']
                 refs=[{'id':m['memory_id'],'version':m['revision'],'scope':m['scope'],'sha256':digest(m)} for m in result]
                 view={'view_id':uid('view:'),'request_ref':uid('request:'),'avatar_id':g['avatar'],'subject_ref':g['subject'],'session_ref':g['session'],'runtime_ref':g['runtime'],'purpose':g['purpose'],'space_refs':scopes,'objects':refs,'policy_versions':[self._scope(c,g,s)['policy_ref'] for s in scopes],'revocation_epoch':self.meta(c,'revocation_epoch'),'compiled_at':stamp(self.now()),'expires_at':stamp(min(parse(g['expires']),self.now()+timedelta(minutes=5)))}
+                deadlines = [m.get('extensions', {}).get(VALIDITY_EXTENSION, {}).get('expires_at') for m in result]
+                view['expires_at'] = min([view['expires_at']] + [t for t in deadlines if t])
                 validate('authorized-view',view);c.execute('INSERT INTO views VALUES(?,?,?,?,?,0,0)',(view['view_id'],g['avatar'],g['id'],encode(scopes),encode(view)));out['authorized_view']=view
             return out
     def acknowledge(self,token,body):
@@ -493,6 +649,34 @@ class Service:
             if touched:self._rebuild_core(c,g['avatar'])
             self._audit(c,g['avatar'],None,'context-use-acknowledged',body['view_id'],g['id'])
             return {'acknowledged':True,'idempotent':False}
+
+    def report_adoption(self, token, body):
+        """Record runtime-reported use of one delivered version, once per view."""
+        exact(body, ['view_id', 'memory_id', 'revision'])
+        view_id, ident, rev = body['view_id'], body['memory_id'], body['revision']
+        require(all(isinstance(v, str) and 0 < len(v) <= 200 for v in (view_id, ident)))
+        require(type(rev) is int and rev > 0)
+        with self.tx() as c:
+            grant = self._grant(c, token)
+            row = c.execute('SELECT * FROM views WHERE id=? AND avatar=? AND grant_id=?',
+                            (view_id, grant['avatar'], grant['id'])).fetchone()
+            require(row and not row['invalidated'], 'E_NOT_FOUND', 404)
+            view = json.loads(row['body'])
+            self._allow(grant, view['space_refs'], 'read', view['purpose'])
+            require(view['revocation_epoch'] == self.meta(c, 'revocation_epoch'), 'E_REVOKED', 403)
+            require(self.now() < parse(view['expires_at']), 'E_EXPIRED', 403)
+            require(row['acked'], 'E_DELIVERY_REQUIRED', 409)
+            ref = next((obj for obj in view['objects'] if obj['id'] == ident and obj['version'] == rev), None)
+            require(ref is not None, 'E_NOT_FOUND', 404)
+            space = ref['scope']['space_ref']
+            require(ref['scope'] == self._scope(c, grant, space), 'E_POLICY_VERSION', 409)
+            receipt = f"adoption:{view_id}:{rev}:{digest(ident)}"
+            prior = c.execute('SELECT 1 FROM audit WHERE id=?', (receipt,)).fetchone()
+            if not prior:
+                c.execute('INSERT INTO audit VALUES(?,?,?,?,?,?,?)',
+                          (receipt, grant['avatar'], space, 'runtime-reported-adoption', ident,
+                           stamp(self.now()), grant['id']))
+            return {'view_id': view_id, 'memory_id': ident, 'revision': rev, 'idempotent': bool(prior)}
 
     def _record_memory_use(self, connection, row, memory, counter):
         connection.execute('INSERT OR IGNORE INTO history VALUES(?,?,?,?,?)',
@@ -519,7 +703,7 @@ class Service:
             require(row is not None, 'E_NOT_FOUND', 404)
             require(row['revision'] == revision, 'E_VERSION_CONFLICT', 409)
             memory = json.loads(row['body'])
-            require(memory['status'] == 'active', 'E_NOT_FOUND', 404)
+            require(self.current_memory(memory), 'E_NOT_FOUND', 404)
             require(memory['scope'] == self._scope(connection, owner, space), 'E_POLICY_VERSION', 409)
             self._record_memory_use(connection, row, memory, 'confirmed_use_count')
             self._rebuild_core(connection, owner['avatar'])
@@ -537,7 +721,7 @@ class Service:
                                   (avatar, scope['space_ref']))
         for row in rows:
             record = json.loads(row['body'])
-            if record['status'] == 'active' and record['level'] != 'M3' and record['scope'] == scope:
+            if self.current_memory(record) and record['level'] != 'M3' and record['scope'] == scope:
                 yield record
 
     def _approval_duplicate(self, connection, avatar, candidate):
@@ -637,7 +821,7 @@ class Service:
             require(isinstance(lifecycle['kind'], str) and lifecycle['kind'] in LOCAL_LIFECYCLE_TRANSITIONS
                     and isinstance(lifecycle['reason'], str) and lifecycle['reason'].strip()
                     and len(lifecycle['reason']) <= 500 and len(d['changes']) == 1, 'E_LIFECYCLE_TRANSITION')
-            self._allow(g, scopes, 'write', q['purpose'], owner=True)
+            self._allow(g, scopes, 'read', q['purpose'], owner=lifecycle['kind'] != 'archive')
         require(q['authenticated_subject_ref']==g['subject'] and q['auth_evidence_ref']==g['id'] and q['avatar_id']==g['avatar'] and q['session_ref']==g['session'] and q['runtime_ref']==g['runtime'],'E_IDENTITY',403)
         require(q['action']=='write' and q['processor_refs']==[],'E_DENIED',403)
         require(d['avatar_id']==g['avatar'] and d['runtime_id']==g['runtime'],'E_SCOPE',403)
@@ -652,7 +836,7 @@ class Service:
             require(ch['domain']==domain and ch['operation'] in ('add','update'),'E_OPERATION_UNSUPPORTED',422)
             b=by[ch['change_id']];m=ch['candidate'];validate('memory-record',m)
             require(isinstance(m['content'],str) and 0<len(m['content'])<=16000,'E_OPERATION_UNSUPPORTED',422)
-            require(m['derived_from']==[] and not m.get('extensions'),'E_OPERATION_UNSUPPORTED',422)
+            require(m['derived_from']==[], 'E_OPERATION_UNSUPPORTED',422)
             require(m['status']=='candidate' and m['level'] in ('M1','M2','M3'),'E_OPERATION_UNSUPPORTED',422)
             require(0<len(m['memory_id'])<=200 and m['memory_id']==b['target_object_id'])
             require(b['confirmation_ref'] is None,'E_CONFIRMATION_REQUIRED',409)
@@ -670,6 +854,9 @@ class Service:
             require(m['lifecycle']['policy_ref']=={'id':'lifecycle:default','version':1},'E_POLICY_VERSION',409)
             require(m['retention'].get('minimum_level') is None and m['retention'].get('inactive_after_days_override') is None,'E_OPERATION_UNSUPPORTED',422)
             prior = json.loads(old['body']) if old else None
+            require(not m.get('extensions') or (prior and m['extensions'] == prior.get('extensions')),
+                    'E_OPERATION_UNSUPPORTED', 422)
+            require(prior is None or prior['status'] == 'active', 'E_LIFECYCLE_TRANSITION', 409)
             if lifecycle is not None:
                 previous_levels, target_level, _ = LOCAL_LIFECYCLE_TRANSITIONS[lifecycle['kind']]
                 require(prior is not None and ch['operation'] == 'update' and prior['status'] == 'active'
@@ -692,6 +879,14 @@ class Service:
         require(trigger != 'host-observation' or not confirm_new, 'E_CONFIRMATION_REQUIRED', 409)
         return self._submit_proposal(token, body['envelope'], trigger=trigger,
                                      confirm_new=confirm_new)
+
+    def related_memories(self, token, body, *, similar=False):
+        from .memory_links import related_memories
+        return related_memories(self, token, body, similar=similar)
+
+    def memory_batch(self, token, body):
+        from .batch import memory_batch
+        return memory_batch(self, token, body)
 
     def propose_revision(self, token, body):
         from .client import proposal
@@ -758,12 +953,22 @@ class Service:
             self._audit(connection, grant['avatar'], None, 'delta-proposed', delta_id, grant['id'])
             return {'delta_id': delta_id, 'status': 'proposed', 'idempotent': False}
 
+    def propose_archive(self, token, body):
+        exact(body, ['space_ref', 'purpose', 'memory_id', 'base_revision', 'reason'])
+        session = self.session(token)
+        require(body['purpose'] == session['purpose'], 'E_DENIED', 403)
+        return self._lifecycle_draft(token, session, body['space_ref'], body['memory_id'], body['base_revision'],
+                                     kind='archive', reason=body['reason'])
+
     def propose_lifecycle(self, token, space, memory_id, revision, *, kind, reason):
+        session = self.session(token)
+        require(session['role'] == 'owner', 'E_DENIED', 403)
+        return self._lifecycle_draft(token, session, space, memory_id, revision, kind=kind, reason=reason)
+
+    def _lifecycle_draft(self, token, session, space, memory_id, revision, *, kind, reason):
         from .client import proposal
         require(isinstance(kind, str) and kind in LOCAL_LIFECYCLE_TRANSITIONS, 'E_LIFECYCLE_TRANSITION')
         require(isinstance(reason, str) and reason.strip() and len(reason) <= 500, 'E_LIFECYCLE_TRANSITION')
-        session = self.session(token)
-        require(session['role'] == 'owner', 'E_DENIED', 403)
         previous = self.memory_for_update(token, space, memory_id, revision)
         previous_levels, target_level, _ = LOCAL_LIFECYCLE_TRANSITIONS[kind]
         require(previous['status'] == 'active' and previous['level'] in previous_levels, 'E_LIFECYCLE_TRANSITION', 409)
@@ -788,6 +993,430 @@ class Service:
             require(row is not None, 'E_NOT_FOUND', 404)
             require(row['revision'] == revision, 'E_VERSION_CONFLICT', 409)
             return json.loads(row['body'])
+
+    @staticmethod
+    def _memory_validity(memory, now):
+        if memory['status'] != 'active':
+            return memory['status']
+        validity = memory.get('extensions', {}).get(VALIDITY_EXTENSION, {})
+        expiry = validity.get('expires_at')
+        return 'expired' if expiry is not None and now >= parse(expiry) else 'current'
+
+    def current_memory(self, memory):
+        return self._memory_validity(memory, self.now()) == 'current'
+
+    def set_memory_validity(self, token, space, memory_id, revision, *, expires_at=None,
+                            successor_id=None, successor_revision=None, clear_expiry=False):
+        """Owner-only compare-and-set. Both endpoints must belong to the same current policy."""
+        require(isinstance(memory_id, str) and memory_id and type(revision) is int and revision > 0)
+        require(type(clear_expiry) is bool and sum((expires_at is not None, successor_id is not None, clear_expiry)) == 1)
+        require((successor_revision is None) == (successor_id is None))
+        if expires_at is not None:
+            require(isinstance(expires_at, str) and len(expires_at) <= 40 and 'T' in expires_at)
+            try:
+                dt = parse(expires_at)
+                require(dt.tzinfo is not None)
+                expiry = stamp(dt)
+            except (ValueError, OverflowError):
+                raise Fault('E_SCHEMA') from None
+        elif successor_id is not None:
+            require(isinstance(successor_id, str) and successor_id and successor_id != memory_id
+                    and type(successor_revision) is int and successor_revision > 0)
+        with self.tx() as c:
+            owner = self._grant(c, token)
+            self._allow(owner, [space], 'write', owner=True)
+            self._allow(owner, [space], 'read')
+            scope = self._scope(c, owner, space)
+
+            def load(ident, expected):
+                row = c.execute('SELECT revision,body FROM memories WHERE avatar=? AND space=? AND id=?',
+                                (owner['avatar'], space, ident)).fetchone()
+                require(row is not None, 'E_NOT_FOUND', 404)
+                record = json.loads(row['body'])
+                require(record['scope'] == scope, 'E_SCOPE', 403)
+                require(row['revision'] == expected, 'E_VERSION_CONFLICT', 409)
+                return row, record
+
+            row, record = load(memory_id, revision)
+            require(record['status'] == 'active', 'E_LIFECYCLE_TRANSITION', 409)
+            validity = record.setdefault('extensions', {}).setdefault(VALIDITY_EXTENSION, {})
+            if successor_id is not None:
+                _, successor = load(successor_id, successor_revision)
+                require(self.current_memory(successor) and successor['level'] in ('M1', 'M2'),
+                        'E_LIFECYCLE_TRANSITION', 409)
+                validity['superseded_by'] = {'id': successor_id, 'revision': successor_revision}
+                record['status'] = 'superseded'
+                event = 'memory-superseded'
+            elif clear_expiry:
+                if 'expires_at' not in validity:
+                    return {'memory_id': memory_id, 'revision': revision, 'validity': validity}
+                del validity['expires_at']
+                if not validity:
+                    del record['extensions'][VALIDITY_EXTENSION]
+                    if not record['extensions']:
+                        del record['extensions']
+                event = 'memory-expiry-cleared'
+            else:
+                validity['expires_at'] = expiry
+                event = 'memory-expiry-set'
+            record.update(previous_revision=revision, revision=revision + 1, updated_at=stamp(self.now()))
+            validate('memory-record', record)
+            c.execute('INSERT INTO history VALUES(?,?,?,?,?)',
+                      (owner['avatar'], memory_id, revision, space, row['body']))
+            c.execute('UPDATE memories SET revision=?,body=? WHERE avatar=? AND id=?',
+                      (revision + 1, encode(record), owner['avatar'], memory_id))
+            self._audit(c, owner['avatar'], space, event, memory_id, owner['id'])
+            self._rebuild_core(c, owner['avatar'])
+            return {'memory_id': memory_id, 'revision': revision + 1, 'validity': validity}
+
+    def preference_candidates(self, token, space, *, after='', limit=20):
+        """Discover repeated wording in active M1 preference evidence for Owner review."""
+        from itertools import groupby
+        from .admission import normalize_text
+        require(isinstance(after, str))
+        require(type(limit) is int and 1 <= limit <= 100)
+        with self.tx(read_only=True) as c:
+            owner = self._grant(c, token)
+            self._allow(owner, [space], 'read', owner=True)
+            scope = self._scope(c, owner, space)
+            c.create_function('normalized_text', 1, normalize_text, deterministic=True)
+            rows = c.execute("""
+                SELECT body, normalized_text(json_extract(body, '$.content')) AS wording
+                FROM memories WHERE avatar=? AND space=?
+                AND json_extract(body, '$.level')='M1' AND json_extract(body, '$.type')='preference-evidence'
+                AND json_extract(body, '$.status')='active'
+                AND json_extract(body, '$.source.source_type') IN ('observed', 'explicit-user')
+                AND normalized_text(json_extract(body, '$.content'))>?
+                ORDER BY wording, json_extract(body, '$.source.source_ref'), id
+            """, (owner['avatar'], space, after))
+            now = self.now()
+            items = []
+            more = False
+            for wording, records in groupby(rows, key=lambda row: row['wording']):
+                previous_ref = None
+                source_count = record_count = 0
+                sample_revisions = {}
+                for row in records:
+                    record = json.loads(row['body'])
+                    if record['scope'] != scope or self._memory_validity(record, now) != 'current':
+                        continue
+                    record_count += 1
+                    ref = record['source']['source_ref']
+                    if ref != previous_ref:
+                        source_count += 1
+                        previous_ref = ref
+                        if len(sample_revisions) < 50:
+                            sample_revisions[record['memory_id']] = record['revision']
+                if source_count < 2:
+                    continue
+                if len(items) == limit:
+                    more = True
+                    break
+                items.append({'wording': wording, 'source_count': source_count, 'record_count': record_count,
+                              'sample_memory_ids': list(sample_revisions), 'sample_revisions': sample_revisions})
+            self._grant(c, token)
+            return {'space_ref': space, 'as_of': stamp(now), 'candidates': items,
+                    'next_after': items[-1]['wording'] if more else None}
+
+    def find_preference_evidence(self, token, space, query, limit=20):
+        """Find possible paraphrases and counterexamples for a local Owner's review."""
+        from .semantic import semantic_search
+        require(isinstance(query, str) and query.strip() and len(query) <= 1000)
+        with self.tx(read_only=True) as c:
+            owner = self._grant(c, token)
+            self._allow(owner, [space], 'read', owner=True)
+        request = {'query': query, 'level': 'M1', 'limit': limit, 'space_refs': [space], 'purpose': owner['purpose']}
+        result = semantic_search(self, token, request, preference_evidence=True)
+        result['items'] = [{'memory_id': m['memory_id'], 'revision': m['revision'], 'content': m['content'],
+                            'source_ref': m['source']['source_ref'], 'source_type': m['source']['source_type'],
+                            'match_ranks': m['match_ranks']} for m in result['items']]
+        return result
+
+    def review_preference_evidence(self, token, space, memory_ids):
+        """Group selected current M1 observations for local Owner review."""
+        require(isinstance(memory_ids, list) and 1 <= len(memory_ids) <= 50)
+        with self.tx(read_only=True) as c:
+            owner = self._grant(c, token)
+            self._allow(owner, [space], 'read', owner=True)
+            return self._preference_sources(c, owner, space, memory_ids)
+
+    def preview_preference(self, token, space, **fields):
+        with self.tx(read_only=True) as c:
+            owner = self._grant(c, token)
+            self._allow(owner, [space], 'read', owner=True)
+            preview = self._preference_draft(c, owner, space, **fields)
+            return {**preview, 'preview_sha256': digest(preview)}
+
+    def confirm_preference(self, token, space, preview_sha256, **fields):
+        with self.tx() as c:
+            owner = self._grant(c, token)
+            self._allow(owner, [space], 'admin', owner=True)
+            update = self._prepare_preference_update(c, owner, space)
+            draft = self._preference_draft(c, owner, space, **fields)
+            require(digest(draft) == preview_sha256, 'E_VERSION_CONFLICT', 409)
+            key = 'preference:' + preview_sha256
+            existing = c.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()
+            if existing:
+                record = json.loads(existing['value'])
+                require(record['status'] == 'confirmed', 'E_VERSION_CONFLICT', 409)
+                return record
+            if draft.get('replaces'):
+                old = self._owner_preference(c, owner, space, draft['replaces'])
+                require(old['status'] == 'confirmed', 'E_VERSION_CONFLICT', 409)
+                old.update(status='superseded', level='M3', successor=key, superseded_at=stamp(self.now()))
+                c.execute('UPDATE meta SET value=? WHERE key=?', (encode(old), old['preference_id']))
+                self._audit(c, owner['avatar'], space, 'preference-superseded', old['preference_id'], owner['id'])
+            # Keep references and roles for provenance, without duplicating observation text.
+            references = [{'memory_id': item['memory_id'], 'revision': item['revision'],
+                           'roles': item['roles'], 'source_ref': group['source_ref']}
+                          for group in draft.pop('evidence')['sources'] for item in group['observations']]
+            record = {**draft, 'status': 'confirmed', 'level': 'M2', 'preference_id': key, 'confirmed_at': stamp(self.now()),
+                      'evidence_refs': references}
+            c.execute('INSERT INTO meta VALUES(?,?)', (key, encode(record)))
+            self._commit_preference_update(c, update)
+            self._audit(c, owner['avatar'], space, 'preference-confirmed', key, owner['id'])
+            return record
+
+    def recall_preferences(self, token, space, condition):
+        require(isinstance(condition, str) and condition.strip() and len(condition) <= 2000)
+        with self.tx(read_only=True) as c:
+            grant = self._grant(c, token)
+            self._allow(grant, [space], 'read')
+            return self._matching_preferences(c, grant, space, condition, 100)
+
+    def _matching_preferences(self, c, grant, space, condition, limit):
+        scope = self._scope(c, grant, space)
+        self._verify_preference_space(c, grant['avatar'], scope)
+        rows = c.execute("""
+            SELECT value FROM meta WHERE key GLOB 'preference:*'
+            AND json_extract(value, '$.avatar_id')=? AND json_extract(value, '$.space_ref')=?
+            AND json_extract(value, '$.scope.policy_ref.version')=?
+            AND json_extract(value, '$.scope.policy_ref.id')=?
+            AND json_extract(value, '$.status')='confirmed' AND json_extract(value, '$.condition')=?
+            AND EXISTS (SELECT 1 FROM json_each(meta.value, '$.allowed_runtimes') WHERE value=?)
+            ORDER BY key LIMIT ?
+        """, (grant['avatar'], space, scope['policy_ref']['version'], scope['policy_ref']['id'], condition.strip(), grant['runtime'], limit + 1))
+        fields = ('preference_id', 'statement', 'condition', 'exception', 'confirmed_at')
+        items = []
+        for row in rows:
+            record = json.loads(row['value'])
+            if record['scope'] == scope:
+                items.append({field: record[field] for field in fields})
+        return {'space_ref': space, 'preferences': items[:limit], 'possibly_more': len(items) > limit}
+
+    def withdraw_preference(self, token, space, preference_id):
+        with self.tx() as c:
+            owner = self._grant(c, token)
+            self._allow(owner, [space], 'admin', owner=True)
+            update = self._prepare_preference_update(c, owner, space)
+            record = self._owner_preference(c, owner, space, preference_id)
+            if record['status'] == 'confirmed':
+                record.update(status='withdrawn', level='M3', withdrawn_at=stamp(self.now()))
+                c.execute('UPDATE meta SET value=? WHERE key=?', (encode(record), preference_id))
+                self._commit_preference_update(c, update)
+                self._audit(c, owner['avatar'], space, 'preference-withdrawn', preference_id, owner['id'])
+            return record
+
+    def _owner_preference(self, c, owner, space, preference_id):
+        require(isinstance(preference_id, str) and re.fullmatch(r'preference:[0-9a-f]{64}', preference_id))
+        row = c.execute('SELECT value FROM meta WHERE key=?', (preference_id,)).fetchone()
+        require(row is not None, 'E_NOT_FOUND', 404)
+        record = json.loads(row['value'])
+        require(record['avatar_id'] == owner['avatar'] and record['space_ref'] == space, 'E_NOT_FOUND', 404)
+        return record
+
+    def preview_preference_baseline(self, token):
+        """Describe exactly which legacy registry state would be enrolled."""
+        with self.tx(read_only=True) as c:
+            owner, spaces, core, _ = self._owner_core(c, token)
+            require(core['extensions'] == [_BASE_EXTENSION], 'E_CRITICAL_EXTENSION', 409)
+            require(not any(ref['id'].startswith(_PREFERENCE_REF_PREFIX) for ref in core['state_index']),
+                    'E_VERSION_CONFLICT', 409)
+            manifests = [self._preference_manifest(c, owner['avatar'], self._scope(c, owner, sid))
+                         for sid in spaces]
+            stored = c.execute("SELECT count(*) FROM meta WHERE key GLOB 'preference:*'").fetchone()[0]
+            require(stored == sum(m['record_count'] for m in manifests), 'E_INTEGRITY', 500)
+            baseline = {'profile': 'x-aiap-preference-baseline-review-v1', 'avatar_id': owner['avatar'],
+                        'core_revision': core['revision'], 'signed_core_sha256': digest(core), 'spaces': manifests}
+            return {'status': 'preview', 'baseline': baseline, 'baseline_sha256': digest(baseline)}
+
+    def preference_manifest(self, token, space):
+        """Compute a scoped digest and verify its commitment when the index declares one."""
+        with self.tx(read_only=True) as c:
+            owner = self._grant(c, token)
+            self._allow(owner, [space], 'read', owner=True)
+            scope = self._scope(c, owner, space)
+            return self._verify_preference_space(c, owner['avatar'], scope, include_manifest=True)
+
+    def _prepare_preference_update(self, c, owner, space):
+        core, enrollment = self._load_signed_core(c, owner['avatar'])
+        if core['extensions'] == [_BASE_EXTENSION]:
+            return None
+        refs = self._preference_references(core)
+        scope = self._scope(c, owner, space)
+        self._check_preference_ref(c, core, scope, refs)
+        return core, refs[space], enrollment['payload']['avatar_public_key']
+
+    def _commit_preference_update(self, c, update):
+        if update is None:
+            return
+        core, ref, public_key = update
+        manifest = self._preference_manifest(c, core['avatar_id'], ref['scope'])
+        ref.update(version=ref['version'] + 1, sha256=manifest['sha256'])
+        del core['integrity']
+        core.update(previous_revision=core['revision'], revision=core['revision'] + 1, updated_at=stamp(self.now()))
+        self._sign_core(core, 'x-aiap-local-ed25519-json-v1', b'AIAP-LOCAL-CORE-v1\x00',
+                        expected_public_key=public_key)
+        validate('avatar-core', core)
+        c.execute('UPDATE cores SET revision=?,body=? WHERE avatar=?',
+                  (core['revision'], encode(core), core['avatar_id']))
+
+    def _verify_preference_space(self, c, avatar, scope, *, include_manifest=False):
+        core, _ = self._load_signed_core(c, avatar)
+        if core['extensions'] == [_BASE_EXTENSION]:
+            if include_manifest:
+                return self._preference_manifest(c, avatar, scope)
+            return
+        refs = self._preference_references(core)
+        return self._check_preference_ref(c, core, scope, refs)
+
+    @staticmethod
+    def _preference_references(core):
+        require(core['extensions'] == [_BASE_EXTENSION, _PREFERENCE_EXTENSION], 'E_CRITICAL_EXTENSION')
+        try:
+            validate('avatar-core', core)
+        except Fault as error:
+            raise Fault('E_INTEGRITY', 500) from error
+        refs = {}
+        for ref in core['state_index']:
+            if ref['id'].startswith(_PREFERENCE_REF_PREFIX):
+                sid = ref['scope']['space_ref']
+                require(sid not in refs and ref['id'] == _PREFERENCE_REF_PREFIX + sid
+                        and ref['scope']['owner_ref'] == core['owner']['owner_ref'], 'E_INTEGRITY', 500)
+                refs[sid] = ref
+        return refs
+
+    def _check_preference_ref(self, c, core, scope, refs):
+        ref = refs.get(scope['space_ref'])
+        require(ref is not None and ref['scope'] == scope, 'E_INTEGRITY', 500)
+        manifest = self._preference_manifest(c, core['avatar_id'], scope)
+        require(ref['sha256'] == manifest['sha256'], 'E_INTEGRITY', 500)
+        return {**manifest, 'signed': True, 'core_revision': core['revision'], 'manifest_version': ref['version']}
+
+    def _preference_manifest(self, c, avatar, scope):
+        profile = 'x-aiap-local-preference-manifest-v1'
+        header = {'profile': profile, 'avatar_id': avatar, 'scope': scope}
+        hasher = hashlib.sha256(canonical(header) + b'\n')
+        rows = c.execute("""SELECT key, value FROM meta WHERE key GLOB 'preference:*'
+            AND json_extract(value, '$.avatar_id')=? AND json_extract(value, '$.space_ref')=?
+            ORDER BY key""", (avatar, scope['space_ref']))
+        count = 0
+        for row in rows:
+            record = json.loads(row['value'])
+            require(record.get('preference_id') == row['key']
+                    and record.get('status') in ('confirmed', 'superseded', 'withdrawn'),
+                    'E_INTEGRITY', 500)
+            entry = {'id': row['key'], 'sha256': digest(record)}
+            hasher.update(canonical(entry) + b'\n')
+            count += 1
+        return {**header, 'record_count': count, 'sha256': hasher.hexdigest(), 'signed': False}
+
+    def list_preferences(self, token, space, *, after='', limit=20):
+        require(isinstance(after, str) and (after == '' or re.fullmatch(r'preference:[0-9a-f]{64}', after)))
+        require(type(limit) is int and 1 <= limit <= 100)
+        with self.tx(read_only=True) as c:
+            owner = self._grant(c, token)
+            self._allow(owner, [space], 'read', owner=True)
+            self._verify_preference_space(c, owner['avatar'], self._scope(c, owner, space))
+            rows = c.execute("""SELECT value FROM meta WHERE key GLOB 'preference:*' AND key>?
+                AND json_extract(value, '$.avatar_id')=? AND json_extract(value, '$.space_ref')=?
+                ORDER BY key LIMIT ?""", (after, owner['avatar'], space, limit + 1))
+            records = [json.loads(row[0]) for row in rows]
+            return {'preferences': records[:limit],
+                    'next_after': records[limit - 1]['preference_id'] if len(records) > limit else None}
+
+    def _preference_draft(self, c, owner, space, *, statement, condition, runtimes, exception=None,
+                          project_rule=None, supporting=None, counterexamples=None, replaces=None, same_event=None,
+                          evidence_revisions=None):
+        for value in (statement, condition):
+            require(isinstance(value, str) and 0 < len(value.strip()) and len(value) <= 2000)
+        for value in (exception, project_rule):
+            require(value is None or (isinstance(value, str) and value.strip() and len(value) <= 2000))
+        require(isinstance(runtimes, list) and 1 <= len(runtimes) <= 50)
+        require(all(isinstance(r, str) and r == r.strip() and 0 < len(r) <= 200 for r in runtimes))
+        supporting = [] if supporting is None else supporting
+        counterexamples = [] if counterexamples is None else counterexamples
+        require(isinstance(supporting, list) and isinstance(counterexamples, list))
+        sources = self._preference_sources(c, owner, space, supporting + counterexamples)
+        if evidence_revisions is None:
+            evidence_revisions = {}
+        require(isinstance(evidence_revisions, dict)
+                and evidence_revisions.keys() <= set(supporting + counterexamples))
+        require(all(type(version) is int and 1 <= version < 2**63 for version in evidence_revisions.values()))
+        for group in sources['sources']:
+            for observation in group['observations']:
+                mid = observation['memory_id']
+                if mid in evidence_revisions:
+                    require(observation['revision'] == evidence_revisions[mid], 'E_VERSION_CONFLICT', 409)
+                observation['roles'] = [role for role, ids in (('supporting', supporting),
+                                        ('counterexample', counterexamples)) if mid in ids]
+        review = {}
+        if same_event is not None:
+            require(isinstance(same_event, list) and len(same_event) <= 25)
+            if same_event:
+                events = self._preference_events(sources['sources'], same_event)
+                review.update(event_group_count=len(events), event_groups=events)
+        if replaces is not None:
+            self._owner_preference(c, owner, space, replaces)
+            review['replaces'] = replaces
+        return {**review, 'status': 'preview', 'target_level': 'M2', 'space_ref': space, 'avatar_id': owner['avatar'],
+                'scope': self._scope(c, owner, space),
+                'statement': statement.strip(), 'condition': condition.strip(),
+                'exception': exception, 'project_rule': project_rule,
+                'allowed_runtimes': sorted(set(runtimes)), 'evidence': sources}
+
+    @staticmethod
+    def _preference_events(sources, same_event):
+        roles = {group['source_ref']: {role for obs in group['observations'] for role in obs['roles']}
+                 for group in sources}
+        remaining = set(roles)
+        groups = []
+        for refs in same_event:
+            require(isinstance(refs, list) and 2 <= len(refs) <= len(remaining))
+            require(all(isinstance(ref, str) and ref in remaining for ref in refs))
+            require(len(set(refs)) == len(refs))
+            remaining.difference_update(refs)
+            groups.append(sorted(refs))
+        groups.extend([ref] for ref in remaining)
+        return [{'source_refs': refs, 'roles': sorted(set.union(*(roles[ref] for ref in refs)))}
+                for refs in sorted(groups)]
+
+    def _preference_sources(self, c, owner, space, memory_ids):
+        require(len(memory_ids) <= 50)
+        require(all(isinstance(mid, str) and 0 < len(mid) <= 200 for mid in memory_ids))
+        ids = sorted(set(memory_ids))
+        scope = self._scope(c, owner, space)
+        if not ids:
+            return {'space_ref': space, 'record_count': 0, 'source_count': 0, 'sources': []}
+        placeholders = ','.join('?' for _ in ids)
+        rows = c.execute(f'SELECT body FROM memories WHERE avatar=? AND space=? AND id IN ({placeholders}) ORDER BY id',
+                         (owner['avatar'], space, *ids))
+        groups = {}
+        now = self.now()
+        selected = 0
+        for row in rows:
+            record = json.loads(row['body'])
+            require(record['scope'] == scope and record['level'] == 'M1'
+                    and self._memory_validity(record, now) == 'current', 'E_NOT_FOUND', 404)
+            source = record['source']
+            groups.setdefault(source['source_ref'], []).append({
+                'memory_id': record['memory_id'], 'revision': record['revision'],
+                'source_type': source['source_type'], 'content': record['content'],
+                'origin_runtime': source.get('origin_runtime')})
+            selected += 1
+        require(selected == len(ids), 'E_NOT_FOUND', 404)
+        return {'space_ref': space, 'record_count': selected, 'source_count': len(groups),
+                'sources': [{'source_ref': ref, 'observations': groups[ref]} for ref in sorted(groups)]}
 
     def memory_history(self, token, space, memory_id, *, revision=None, before=None, limit=20):
         require(isinstance(memory_id, str) and 0 < len(memory_id) <= 200)
@@ -833,6 +1462,21 @@ class Service:
                 'confidence': memory['confidence'],
                 'stable_preference': memory['lifecycle']['stable_preference']}
 
+    def proposal_status(self, token, body):
+        """Report only the caller's single-space proposal state."""
+        exact(body, ['delta_id', 'space_ref', 'purpose'])
+        ident, space, purpose = body['delta_id'], body['space_ref'], body['purpose']
+        require(isinstance(ident, str) and 0 < len(ident) <= 512)
+        require(isinstance(purpose, str) and purpose)
+        with self.tx(read_only=True) as connection:
+            grant = self._grant(connection, token)
+            self._allow(grant, [space], 'read', purpose)
+            row = connection.execute(
+                'SELECT scopes, status FROM deltas WHERE avatar=? AND issuer=? AND id=?',
+                (grant['avatar'], grant['id'], ident)).fetchone()
+            status = row['status'] if row and json.loads(row['scopes']) == [space] else 'not-found'
+            return {'delta_id': ident, 'status': status}
+
     def review(self, token, ident, *, changes=False):
         require(isinstance(ident, str))
         with self.tx(read_only=True) as connection:
@@ -846,6 +1490,11 @@ class Service:
             require(grant['role'] == 'owner' or grant['id'] == row['issuer'], 'E_DENIED', 403)
             result = {'delta_id': ident, 'status': row['status'],
                       'outcome': json.loads(row['outcome']) if row['outcome'] else None}
+            if grant['role'] == 'owner' and row['status'] in ('accepted', 'rejected'):
+                reason = connection.execute(
+                    "SELECT event FROM audit WHERE avatar=? AND object_id=? AND event GLOB 'delta-decision-reason:*' LIMIT 1",
+                    (grant['avatar'], ident)).fetchone()
+                result['decision_reason'] = reason[0].partition(':')[2] if reason else None
             if not changes:
                 return {**result, 'candidate': json.loads(row['body']) if row['body'] else None}
             if row['status'] != 'proposed':
@@ -947,12 +1596,13 @@ class Service:
                 WHERE memory.avatar = :avatar
                   AND memory.space IN (SELECT value FROM json_each(:visible))
                   AND json_extract(memory.body, '$.status') = 'active'
+                  AND COALESCE(json_extract(memory.body, '$.extensions."x-aiap-memory-validity-v1".expires_at'), '9999Z') > :now
                   AND json_extract(memory.body, '$.scope.owner_ref') = :owner_ref
                   AND json_extract(memory.body, '$.scope.space_ref') = memory.space
                   AND json_extract(memory.body, '$.scope.policy_ref.id') = spaces.policy
                   AND json_extract(memory.body, '$.scope.policy_ref.version') = spaces.revision
                 GROUP BY memory.space
-            ''', {**params, 'owner_ref': owner['subject']})}
+            ''', {**params, 'owner_ref': owner['subject'], 'now': stamp(self.now())})}
             pending_counts = dict(connection.execute(f'''
                 SELECT participant.value, count(DISTINCT delta.id)
                 FROM deltas AS delta JOIN json_each(delta.scopes) AS participant
@@ -1013,7 +1663,8 @@ class Service:
                         'E_DUPLICATE_MEMORY', 409)
         return records
 
-    def decide(self,token,ident,approve,*,allow_lifecycle=False):
+    def decide(self,token,ident,approve,*,allow_lifecycle=False,reason=None):
+        require(reason is None or reason in DECISION_REASONS)
         require(isinstance(ident,str) and type(approve) is bool)
         with self.tx() as c:
             owner=self._grant(c,token);require(owner['role']=='owner','E_DENIED',403);r=c.execute('SELECT * FROM deltas WHERE avatar=? AND id=?',(owner['avatar'],ident)).fetchone()
@@ -1021,6 +1672,8 @@ class Service:
             final='accepted' if approve else 'rejected'
             if r['status']==final:return {'delta_id':ident,'status':final,'idempotent':True}
             require(r['status']=='proposed','E_VERSION_CONFLICT',409)
+            if reason is not None:
+                self._audit(c, owner['avatar'], None, 'delta-decision-reason:' + reason, ident, owner['id'])
             if not approve:
                 c.execute('UPDATE deltas SET status=?,body=NULL WHERE avatar=? AND id=?',('rejected',owner['avatar'],ident));self._audit(c,owner['avatar'],None,'delta-rejected',ident,owner['id'])
                 return {'delta_id':ident,'status':'rejected','idempotent':False}
@@ -1030,6 +1683,8 @@ class Service:
             receipt=self._audit(c,owner['avatar'],None,'delta-accepted',ident,owner['id']);out=[]
             for proposed,old in records:
                 m=copy.deepcopy(proposed)
+                if old and old.get('extensions'):
+                    m['extensions'] = copy.deepcopy(old['extensions'])
                 if old:c.execute('INSERT OR IGNORE INTO history VALUES(?,?,?,?,?)',(owner['avatar'],old['memory_id'],old['revision'],old['scope']['space_ref'],encode(old)))
                 now=stamp(self.now());m['revision']=old['revision']+1 if old else 1;m['previous_revision']=old['revision'] if old else None
                 m['created_at']=old['created_at'] if old else now;m['updated_at']=now;m['status']='active'
@@ -1133,7 +1788,7 @@ class Service:
             now = self.now()
             for row in c.execute('SELECT * FROM memories ORDER BY avatar,id').fetchall():
                 m=json.loads(row['body']);lc=m['lifecycle'];ret=m['retention']
-                if m['status']!='active' or m['level'] not in ('M1','M2'):continue
+                if not self.current_memory(m) or m['level'] not in ('M1','M2'):continue
                 if ret['pinned'] or ret['decay_exempt'] or lc['stable_preference'] or lc['recurrence_ref'] or lc['active_task_refs']:continue
                 expected_use = parse(lc['expected_next_use']) if lc['expected_next_use'] else None
                 if expected_use and timedelta(0) <= expected_use - now <= timedelta(days=30):
