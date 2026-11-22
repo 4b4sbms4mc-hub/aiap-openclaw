@@ -45,7 +45,7 @@ def restore_isolated(registry, checkpoint, snapshot, snapshot_sha256, target, ob
         info = snapshot.lstat()
         require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid()
                 and not info.st_mode & 0o077, 'E_RECOVERY_FILE')
-        before = registry.review_live(checkpoint, observe, allow_indexed=False)
+        before = registry.review_live(checkpoint, observe)
         _verify_backup(snapshot, snapshot_sha256)
 
         @contextmanager
@@ -53,7 +53,7 @@ def restore_isolated(registry, checkpoint, snapshot, snapshot_sha256, target, ob
             # Recheck the backup after staging, before requesting the final short-lived proof.
             _verify_backup(snapshot, snapshot_sha256)
             with registry._verified_source(checkpoint, observe, expected=before,
-                                           reserve_head=True) as final:
+                                           reserve_head=True, index_only=True) as final:
                 yield {
                     'backup_sha256': snapshot_sha256,
                     'governance_sha256': final['head']['governance_sha256'],

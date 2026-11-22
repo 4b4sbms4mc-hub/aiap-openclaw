@@ -87,7 +87,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(error.exception.code, code)
         self.assertFalse(self.target.exists())
 
-    def test_offline_signed_preferences_require_matching_registries(self):
+    def indexed_backup(self):
         # Synthetic local stores only. Start both generations at a signed baseline.
         service = self.service
         space = 'space:general'
@@ -111,6 +111,11 @@ class RecoveryTests(unittest.TestCase):
         shutil.copytree(self.current, backup)
         checkpoint = self.root / 'indexed.json'
         pin = export_checkpoint(self.current, checkpoint, clock=lambda: self.now)['checkpoint_sha256']
+        return backup, checkpoint, pin, manifest, pref
+
+    def test_offline_signed_preferences_require_matching_registries(self):
+        service, space = self.service, 'space:general'
+        backup, checkpoint, pin, manifest, pref = self.indexed_backup()
         options = dict(snapshot_dir=backup, checkpoint=checkpoint, expected_sha256=pin)
         report = self.restore(**options)
         self.assertEqual((report['restored_preference_records'], report['verified_preference_manifests']), (2, 1))
@@ -121,7 +126,6 @@ class RecoveryTests(unittest.TestCase):
         recalled = restored.recall_preferences(runtime, space, 'Release')['preferences']
         self.assertEqual([item['preference_id'] for item in recalled], [pref['preference_id']])
         self.target = self.root / 'rejected'
-        self.reject('E_CRITICAL_EXTENSION', **options, publication_guard=lambda: self.fail('guard invoked'))
         self.reject('E_CRITICAL_EXTENSION', **{**options, 'snapshot_dir': self.snapshot})
         with sqlite3.connect(backup / 'core.sqlite3') as db:
             db.execute("INSERT INTO meta VALUES('preference:orphan', '{}')")
@@ -194,6 +198,41 @@ class RecoveryTests(unittest.TestCase):
         self.assertFalse(result['production_activation'])
         self.assertEqual(json.loads((self.target / 'recovery-report.json').read_text()), result)
         self.assertEqual(self.hashes(self.snapshot), self.original_files)
+
+    def test_guarded_indexed_restore_rechecks_live_preferences_before_publication(self):
+        from aiap_core.contracts import digest
+        from aiap_core.recovery_isolated import restore_isolated
+        from aiap_core.recovery_registry import CheckpointRegistry
+        from recovery_avatar_observation import observe_source
+
+        backup, checkpoint, pin, _, pref = self.indexed_backup()
+        clock = lambda: self.now
+        registry = CheckpointRegistry(self.root / 'registry', self.current, clock=clock)
+        registry.initialize(digest(self.service.core(self.owner)['local_enrollment']))
+        registry.register(checkpoint, pin)
+        args = (registry, checkpoint, backup, self.hashes(backup)['core.sqlite3'])
+        nonces = []
+        def observe(nonce, requested):
+            self.assertEqual(requested, pin)
+            self.assertNotIn(nonce, nonces)
+            nonces.append(nonce)
+            return observe_source(self.current, checkpoint, pin, nonce, clock)
+
+        result = restore_isolated(*args, self.root / 'valid', observe)
+        self.assertEqual(len(nonces), 2)
+        self.assertEqual(result['restored_preference_records'], 2)
+        self.assertEqual(result['status'], 'isolated-recovery-created')
+        self.assertFalse(result['production_activation'])
+        def withdraw_before_final(nonce, requested):
+            if len(nonces) == 3:
+                self.service.withdraw_preference(self.owner, 'space:general', pref['preference_id'])
+            return observe(nonce, requested)
+        with self.assertRaises(Fault) as rejected:
+            restore_isolated(*args, self.target, withdraw_before_final)
+        self.assertEqual(rejected.exception.code, 'E_SOURCE_DIVERGED')
+        self.assertEqual(len(nonces), 4)
+        self.assertFalse(self.target.exists())
+        self.assertFalse(list(self.root.glob('.aiap-recovery-*')))
 
     def test_all_old_credentials_fail_and_new_approval_still_works(self):
         self.restore()

@@ -31,7 +31,7 @@ def restore_snapshot(snapshot_dir, checkpoint, expected_sha256, target_dir, cloc
                      *, publication_guard=None):
     now = (clock or (lambda: datetime.now(timezone.utc)))()
     payload, refs, preferences = _load_checkpoint(checkpoint, expected_sha256, now,
-                                                  allow_preferences=publication_guard is None)
+                                                  allow_preferences=True)
     indexed = payload['core']['extensions'] != [_BASE_EXTENSION]
     if not indexed:
         require(all(s['id'] in {'space:general', 'space:life', 'space:work'} for s in payload['spaces']),
