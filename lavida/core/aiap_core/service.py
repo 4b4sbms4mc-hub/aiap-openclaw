@@ -1433,14 +1433,16 @@ class Service:
                 now = self.now()
                 flagged = []
                 for record in page:
-                    if record['scope'] != scope:
-                        continue
+                    scope_changed = record['scope'] != scope
                     statuses = self._preference_evidence_status(c, owner, space, scope, record, now)
                     changes = [{**item, 'roles': ref['roles']}
                                for item, ref in zip(statuses, record['evidence_refs']) if item['state'] != 'current']
-                    if changes:
-                        flagged.append({'preference_id': record['preference_id'], 'statement': record['statement'],
-                                        'condition': record['condition'], 'changed_evidence': changes})
+                    if scope_changed or changes:
+                        item = {'preference_id': record['preference_id'], 'statement': record['statement'],
+                                'condition': record['condition'], 'changed_evidence': changes}
+                        if scope_changed:
+                            item['scope_changed'] = True
+                        flagged.append(item)
                 return {'preferences': flagged, 'next_after': next_after, 'scanned': len(page)}
             return {'preferences': page, 'next_after': next_after}
 

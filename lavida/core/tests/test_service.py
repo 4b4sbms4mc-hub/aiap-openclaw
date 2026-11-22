@@ -240,6 +240,31 @@ class ServiceTests(unittest.TestCase):
         self.fault('E_DENIED', lambda: self.s.list_preferences(self.work, space, needs_review=True))
         self.assertEqual(self.s.db.read_bytes(), before)
 
+    def test_owner_review_surfaces_preference_from_previous_space_policy(self):
+        space = 'space:work'
+        fields = dict(statement='Review releases', condition='Release', runtimes=['test-work'])
+
+        def confirm(**changes):
+            draft = {**fields, **changes}
+            pin = self.s.preview_preference(self.owner, space, **draft)['preview_sha256']
+            return self.s.confirm_preference(self.owner, space, pin, **draft)['preference_id']
+
+        previous = confirm()
+        with self.s.tx() as db:
+            db.execute('UPDATE spaces SET revision=revision+1 WHERE id=?', (space,))
+        before = self.s.db.read_bytes()
+        self.assertEqual(self.s.recall_preferences(self.work, space, 'Release')['preferences'], [])
+        item, = self.s.list_preferences(self.owner, space, needs_review=True)['preferences']
+        self.assertEqual(item['preference_id'], previous)
+        self.assertTrue(item['scope_changed'])
+        self.assertEqual(item['changed_evidence'], [])
+        self.fault('E_DENIED', lambda: self.s.list_preferences(self.work, space, needs_review=True))
+        self.assertEqual(self.s.db.read_bytes(), before)
+        current = confirm(replaces=previous)
+        self.assertEqual(self.s.list_preferences(self.owner, space, needs_review=True)['preferences'], [])
+        item, = self.s.recall_preferences(self.work, space, 'Release')['preferences']
+        self.assertEqual(item['preference_id'], current)
+
     def test_preference_replacement_and_turn_override(self):
         space = 'space:work'
         def confirm(**changes):
