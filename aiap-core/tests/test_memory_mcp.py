@@ -179,6 +179,9 @@ class MemoryAdmissionTests(unittest.IsolatedAsyncioTestCase):
         private = {**fields, 'statement': 'Another runtime only', 'runtimes': ['other']}
         other = self.core.preview_preference(self.owner, space, **private)
         self.core.confirm_preference(self.owner, space, other['preview_sha256'], **private)
+        self.assertNotIn('preference_conditions', await self.call('aiap_memory_status'))
+        discovery = await self.call('aiap_memory_status', preference_conditions_after='')
+        self.assertEqual(discovery['preference_conditions'], {'conditions': ['Release'], 'next_after': None})
         page = await context(preference_condition=' Release ')
         item, = page['preference_defaults']
         self.assertEqual(item['preference_id'], record['preference_id'])

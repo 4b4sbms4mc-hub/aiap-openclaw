@@ -30,6 +30,8 @@ try {
     ok('semantic HTTP results and explicit fallback reach plugin');
   }
   if(process.env.AIAP_TEST_SEMANTIC){console.log('PASS semantic plugin HTTP bridge');} else {
+  assert.deepEqual((await a.status(undefined,{preference_conditions_after:''})).preference_conditions,
+    {conditions:['Release'],next_after:null});
   const prefPage = await a.search({query:'', preference_condition:' Release '});
   assert.equal(prefPage.preference_defaults.length,1);
   assert.equal(prefPage.preference_defaults[0].statement,'Review the plan');

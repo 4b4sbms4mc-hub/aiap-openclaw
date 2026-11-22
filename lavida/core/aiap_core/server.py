@@ -40,6 +40,7 @@ class Handler(BaseHTTPRequestHandler):
                 elif self.path=='/v1/memories/relations':result=s.related_memories(token,body)
                 elif self.path=='/v1/memories/similar':result=s.related_memories(token,body,similar=True)
                 elif self.path=='/v1/memories/list':result=s.list_memories(token,body)
+                elif self.path=='/v1/preferences/conditions':result=s.preference_conditions(token,body)
                 elif self.path=='/v1/preferences/recall':
                     exact(body, {'space_ref', 'purpose', 'condition', 'limit'})
                     require(isinstance(body['purpose'], str) and bool(body['purpose']))

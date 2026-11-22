@@ -1215,6 +1215,33 @@ class HTTPTests(ServiceTests):
     def test_http_no_token(self):
         with self.assertRaises(urllib.error.HTTPError) as cm:urllib.request.urlopen(self.base+'/v1/core')
         self.assertEqual(cm.exception.code,401)
+    def test_http_preference_condition_discovery_pages_authorized_labels(self):
+        space = 'space:work'
+        path = '/v1/preferences/conditions'
+        body = dict(space_ref=space, purpose='work-task', after='')
+        def confirm(condition, runtime='test-work', statement='Default'):
+            fields = dict(statement=statement, condition=condition, runtimes=[runtime])
+            pin = self.s.preview_preference(self.owner, space, **fields)['preview_sha256']
+            return self.s.confirm_preference(self.owner, space, pin, **fields)['preference_id']
+        labels = [f'Release {i:02}' for i in range(21)]
+        for label in labels:
+            confirm(label)
+        confirm(labels[0], statement='Second default')
+        confirm('Private label', runtime='other')
+        self.s.withdraw_preference(self.owner, space, confirm('Archived'))
+        before = self.s.db.read_bytes()
+        page = self.client.call(path, body)
+        self.assertEqual(page, {'space_ref': space, 'conditions': labels[:20], 'next_after': labels[19]})
+        self.assertEqual(self.client.call(path, {**body, 'after': page['next_after']}),
+                         {'space_ref': space, 'conditions': labels[20:], 'next_after': None})
+        for edits in ({'purpose':'other'}, {'space_ref':'space:life'}):
+            with self.assertRaisesRegex(RuntimeError, 'E_DENIED'):
+                self.client.call(path, {**body, **edits})
+        self.assertEqual(self.s.db.read_bytes(), before)
+        self.s.revoke_grant(self.s.session(self.work)['auth_evidence_ref'])
+        with self.assertRaisesRegex(RuntimeError, 'E_IDENTITY'):
+            self.client.call(path, body)
+
     def test_http_preference_recall_binds_scope_purpose_and_live_grant(self):
         path = '/v1/preferences/recall'
         body = dict(space_ref='space:work', purpose='work-task', condition='Release', limit=1)

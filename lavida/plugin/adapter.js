@@ -136,9 +136,21 @@ export class Adapter {
     if (s.role !== 'adapter' || s.avatar_id !== this.cfg.avatarId || s.purpose !== b.purpose || s.runtime_ref !== b.runtimeRef || s.space_refs?.length !== 1 || s.space_refs[0] !== b.spaceRef || s.scopes?.length !== 1 || s.scopes[0].space_ref !== b.spaceRef) fail('E_GRANT_BINDING');
     return {token:credential.token, session:s};
   }
-  async status(signal) {
-    const {session:s} = await this.session(signal);
-    return {ok:true, avatar_id:s.avatar_id, space_ref:this.binding.spaceRef, role:s.role, expires_at:s.expires_at, retrieval:s.retrieval ?? 'scoped-literal-substring',
+  async status(signal, params={}) {
+    const {token,session:s} = await this.session(signal);
+    const optional = {};
+    const after = params.preference_conditions_after;
+    if (after !== undefined) {
+      if (typeof after !== 'string' || Array.from(after).length > 2000) fail('E_ARGUMENTS');
+      const page = await this.call(token, '/v1/preferences/conditions', {space_ref:this.binding.spaceRef,
+        purpose:s.purpose, after}, signal);
+      const labels = page.conditions;
+      if (page.space_ref !== this.binding.spaceRef || !Array.isArray(labels) || labels.length > 20
+          || labels.some(label => typeof label !== 'string' || !label || Array.from(label).length > 2000)
+          || (page.next_after !== null && (!labels.length || typeof page.next_after !== 'string' || page.next_after !== labels.at(-1)))) fail('E_RESPONSE_SCOPE');
+      optional.preference_conditions = {conditions:labels, next_after:page.next_after};
+    }
+    return {...optional,ok:true, avatar_id:s.avatar_id, space_ref:this.binding.spaceRef, role:s.role, expires_at:s.expires_at, retrieval:s.retrieval ?? 'scoped-literal-substring',
       proposal_admission:s.proposal_admission === 'checked-v1' ? 'checked-v1' : 'legacy',
       proposal_revision:s.proposal_revision === true, writes:'owner-confirmed-proposals'};
   }

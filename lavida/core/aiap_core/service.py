@@ -1185,6 +1185,28 @@ class Service:
             self._allow(grant, [space], 'read', purpose=purpose)
             return self._matching_preferences(c, grant, space, condition, limit)
 
+    def preference_conditions(self, token, body):
+        """List distinct confirmed condition labels visible to this runtime."""
+        exact(body, ('space_ref', 'purpose', 'after'))
+        space, purpose, after = (body[key] for key in ('space_ref', 'purpose', 'after'))
+        require(isinstance(purpose, str) and purpose and isinstance(after, str) and len(after) <= 2000)
+        with self.tx(read_only=True) as c:
+            grant = self._grant(c, token)
+            self._allow(grant, [space], 'read', purpose=purpose)
+            scope = self._scope(c, grant, space)
+            self._verify_preference_space(c, grant['avatar'], scope)
+            rows = c.execute("""
+                SELECT DISTINCT json_extract(value, '$.condition') AS label
+                FROM meta WHERE key GLOB 'preference:*'
+                AND json_extract(value, '$.avatar_id')=? AND json_extract(value, '$.space_ref')=?
+                AND json_extract(value, '$.scope')=? AND json_extract(value, '$.status')='confirmed'
+                AND EXISTS (SELECT 1 FROM json_each(meta.value, '$.allowed_runtimes') WHERE value=?)
+                AND json_extract(value, '$.condition') > ? ORDER BY label LIMIT 21
+            """, (grant['avatar'], space, encode(scope), grant['runtime'], after))
+            labels = [row[0] for row in rows]
+            return {'space_ref': space, 'conditions': labels[:20],
+                    'next_after': labels[19] if len(labels) > 20 else None}
+
     def _matching_preferences(self, c, grant, space, condition, limit):
         scope = self._scope(c, grant, space)
         self._verify_preference_space(c, grant['avatar'], scope)
