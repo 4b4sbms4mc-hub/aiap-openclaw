@@ -69,7 +69,7 @@ def _read_session_excerpt():
 
 
 def main():
-    ap=argparse.ArgumentParser(description='AIAP Core Service 0.2.3 — Wang Lu');ap.add_argument('--data-dir',default=os.environ.get('AIAP_DATA_DIR','./data'));sp=ap.add_subparsers(dest='command',required=True)
+    ap=argparse.ArgumentParser(description='AIAP Core Service 0.2.4 — Wang Lu');ap.add_argument('--data-dir',default=os.environ.get('AIAP_DATA_DIR','./data'));sp=ap.add_subparsers(dest='command',required=True)
     sp.add_parser('init',help='Initialize once without overwriting an existing identity.')
     sv=sp.add_parser('serve');sv.add_argument('--host',default='127.0.0.1');sv.add_argument('--port',type=int,default=8042);sv.add_argument('--archive-interval',type=int,default=3600)
     g=sp.add_parser('grant');g.add_argument('--spaces',nargs='+',required=True);g.add_argument('--purpose',required=True);g.add_argument('--runtime',required=True);g.add_argument('--role',choices=['adapter','owner'],default='adapter');g.add_argument('--days',type=int,default=7);g.add_argument('--output',required=True)

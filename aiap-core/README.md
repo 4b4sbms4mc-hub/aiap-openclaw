@@ -26,7 +26,7 @@ pytest
 
 ### Fresh DSH installation with a local Core
 
-Download both wheels and `SHA256SUMS-MCP.txt` from [AIAP Memory MCP 0.3.7](https://github.com/4b4sbms4mc-hub/aiap-openclaw/releases/tag/aiap-mcp-v0.3.7). Use Python 3.12 and run the commands from the download directory.
+Download both wheels and `SHA256SUMS-MCP.txt` from [AIAP Memory MCP 0.3.8](https://github.com/4b4sbms4mc-hub/aiap-openclaw/releases/tag/aiap-mcp-v0.3.8). Use Python 3.12 and run the commands from the download directory.
 
 On macOS and Linux:
 
@@ -35,7 +35,7 @@ shasum -a 256 -c SHA256SUMS-MCP.txt
 VENV="$HOME/.local/share/aiap-dsh/venv"
 DATA="$HOME/.local/share/aiap-dsh/core"
 python3.12 -m venv "$VENV"
-"$VENV/bin/python" -m pip install ./aiap_core_service-0.2.3-py3-none-any.whl './aiap_reference-0.3.7-py3-none-any.whl[mcp]'
+"$VENV/bin/python" -m pip install ./aiap_core_service-0.2.4-py3-none-any.whl './aiap_reference-0.3.8-py3-none-any.whl[mcp]'
 "$VENV/bin/python" -m aiap_core --data-dir "$DATA" init
 "$VENV/bin/python" -m aiap_core --data-dir "$DATA" grant --spaces space:general \
   --purpose aiap-memory --runtime deepseek-harness --output "$DATA/adapter.json"
@@ -48,7 +48,7 @@ $Venv = Join-Path $env:LOCALAPPDATA 'AIAP\venv'
 $Data = Join-Path $env:LOCALAPPDATA 'AIAP\core'
 py -3.12 -m venv $Venv
 $Python = Join-Path $Venv 'Scripts\python.exe'
-& $Python -m pip install .\aiap_core_service-0.2.3-py3-none-any.whl '.\aiap_reference-0.3.7-py3-none-any.whl[mcp]'
+& $Python -m pip install .\aiap_core_service-0.2.4-py3-none-any.whl '.\aiap_reference-0.3.8-py3-none-any.whl[mcp]'
 & $Python -m aiap_core --data-dir $Data init
 & $Python -m aiap_core --data-dir $Data grant --spaces space:general --purpose aiap-memory --runtime deepseek-harness --output (Join-Path $Data 'adapter.json')
 ```
@@ -70,7 +70,7 @@ For Owner commands in Windows PowerShell, use `& $Python` as the executable and 
 
 #### macOS system embeddings
 
-On macOS, install the Core wheel with the optional bridge using `"$VENV/bin/python" -m pip install './aiap_core_service-0.2.3-py3-none-any.whl[system-embedding]'`.
+On macOS, install the Core wheel with the optional bridge using `"$VENV/bin/python" -m pip install './aiap_core_service-0.2.4-py3-none-any.whl[system-embedding]'`.
 On macOS 14 or later, add `--system-embedding-language zh-Hans` to the local MCP server arguments, or set `AIAP_SYSTEM_EMBED_LANG=zh-Hans` and `AIAP_EMBED_SPACES=space:general` on a standalone Core server. Use the locale that best matches the indexed space. An explicit HTTP embedding endpoint takes precedence in the standalone server.
 
 Run `aiap embedding status --language zh-Hans` to check whether the system model is available. If Apple reports missing assets, the MCP status and degraded search include the command `aiap embedding download --language zh-Hans`. This command asks macOS to download its own assets. Searches use offline BM25 while the system model is unavailable.
@@ -121,7 +121,7 @@ La Vida's opt-in automatic capture uses checked submission with the host-observa
 
 Automatic proposals use an optional DSH host plugin alongside the Memory MCP. This release supports the audited DSH Desktop 0.2.2-rc.5 SessionController and disables capture on unknown host versions. It leaves the signed DSH application files untouched. The standard Memory MCP remains available independently.
 
-1. Download `dsh-aiap-capture-0.3.6.tar.gz`, `SHA256SUMS-MCP.txt`, and `install-dsh-capture.sh` from the [release](https://github.com/4b4sbms4mc-hub/aiap-openclaw/releases/tag/aiap-mcp-v0.3.7). Open a terminal in the download directory.
+1. Download `dsh-aiap-capture-0.3.6.tar.gz`, `SHA256SUMS-MCP.txt`, and `install-dsh-capture.sh` from the [release](https://github.com/4b4sbms4mc-hub/aiap-openclaw/releases/tag/aiap-mcp-v0.3.8). Open a terminal in the download directory.
 2. On macOS, run the installer. For a different DSH profile, pass its path as the second argument.
 
    ```sh
