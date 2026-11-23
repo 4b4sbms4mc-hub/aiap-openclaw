@@ -9,6 +9,7 @@ The in-memory witness/key below is deliberately unsuitable for production custod
 from datetime import timedelta
 from pathlib import Path
 import sqlite3
+import os
 
 from cryptography.hazmat.primitives import serialization
 
@@ -17,7 +18,9 @@ from recovery_guard import (SQL, Fault, require, canonical, digest, b64,
                             load_checkpoint, schema)
 from recovery_source_gate import governance
 from recovery_witness import SyntheticWitness, hex_digest, DOMAIN
-from aiap_core.recovery_observation import OBS_DOMAIN, OBS_PROFILE, verify_observation
+from aiap_core.recovery_checkpoint import load_checkpoint_index, _check_registry_coverage
+from aiap_core.service import Service, _BASE_EXTENSION
+from aiap_core.recovery_observation import OBS_DOMAIN, OBS_PROFILE, observation_format, verify_observation
 
 def checkpoint_governance(payload):
     return {k: payload[k] for k in ('core', 'spaces', 'tombstones', 'revocation_epoch')}
@@ -32,13 +35,19 @@ def observe_source(source_dir, checkpoint, pin, nonce, clock):
     """
     require(hex_digest(nonce), 'E_WITNESS_NONCE')
     now = clock()
-    payload, _ = load_checkpoint(checkpoint, pin, now)
+    payload, _, refs = load_checkpoint_index(checkpoint, pin, now)
+    core = payload['core']
+    indexed = core['extensions'] != [_BASE_EXTENSION]
+    if not indexed:
+        require(all(row['id'] in {'space:general', 'space:life', 'space:work'} for row in payload['spaces']),
+                'E_SCOPE')
+    profile, domain = observation_format(core)
     source = Path(source_dir)
     path = source / 'core.sqlite3'
     require(not source.is_symlink() and not path.is_symlink() and path.is_file(), 'E_RECOVERY_FILE')
     # Limit this lab reader to the tested rollback-journal fixture. SQLite may
     # need sidecar handling even on a read-only WAL connection; do not claim it.
-    require(not any((source / ('core.sqlite3' + suffix)).exists()
+    require(not any(os.path.lexists(source / ('core.sqlite3' + suffix))
                     for suffix in ('-wal', '-shm', '-journal')), 'E_OPERATION_UNSUPPORTED')
     expected = sqlite3.connect(':memory:')
     try:
@@ -53,22 +62,34 @@ def observe_source(source_dir, checkpoint, pin, nonce, clock):
         db.execute('PRAGMA trusted_schema=OFF')
         db.execute('BEGIN')
         require([tuple(row) for row in schema(db)] == expected_schema, 'E_OPERATION_UNSUPPORTED')
-        meta = {row[0]: strict_json(row[1]) for row in db.execute('SELECT key,value FROM meta')}
+        meta = {}
+        for key, value in db.execute('SELECT key,value FROM meta'):
+            if indexed and key.startswith('preference:'):
+                strict_json(value)
+            else:
+                meta[key] = strict_json(value)
         require(set(meta) == {'avatar', 'owner', 'enrollment', 'revocation_epoch'}, 'E_OPERATION_UNSUPPORTED')
         require(meta['enrollment'] == payload['enrollment']
                 and meta['avatar'] == payload['core']['avatar_id']
                 and meta['owner'] == payload['core']['owner']['owner_ref'], 'E_IDENTITY')
         require(digest(governance(db)) == digest(checkpoint_governance(payload)), 'E_SOURCE_DIVERGED')
+        rows = db.execute('SELECT avatar,owner,revision FROM cores').fetchall()
+        require(len(rows) == 1 and tuple(rows[0]) == (meta['avatar'], meta['owner'], core['revision']),
+                'E_SOURCE_DIVERGED')
+        if indexed:
+            _check_registry_coverage(Service(source, enable_semantic=False), db, core, refs)
         # Sign the exact captured state while the read snapshot is still held.
         # An ordinary writer may change the source after this snapshot; no lease.
         key_bytes = read_file(source / 'avatar-key.pem', 16384)
         require(public_key(key_bytes) == payload['enrollment']['payload']['avatar_public_key'], 'E_INTEGRITY')
-        body = {'profile': OBS_PROFILE, 'nonce': nonce, 'checkpoint_sha256': pin,
+        body = {'profile': profile, 'nonce': nonce, 'checkpoint_sha256': pin,
                 'enrollment_sha256': digest(payload['enrollment']),
                 'issued_at': stamp(now),
                 'expires_at': stamp(min(now + timedelta(seconds=30), parse(payload['expires_at'])))}
         key = serialization.load_pem_private_key(key_bytes, None)
-        return {'payload': body, 'signature': b64(key.sign(OBS_DOMAIN + canonical(body)))}
+        signature = b64(key.sign(domain + canonical(body)))
+        require(now <= clock() < parse(body['expires_at']), 'E_EXPIRED')
+        return {'payload': body, 'signature': signature}
     finally:
         db.close()
 

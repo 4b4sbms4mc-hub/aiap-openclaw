@@ -69,7 +69,7 @@ def _read_session_excerpt():
 
 
 def main():
-    ap=argparse.ArgumentParser(description='AIAP Core Service 0.2.3 — Wang Lu');ap.add_argument('--data-dir',default=os.environ.get('AIAP_DATA_DIR','./data'));sp=ap.add_subparsers(dest='command',required=True)
+    ap=argparse.ArgumentParser(description='AIAP Core Service 0.2.4 — Wang Lu');ap.add_argument('--data-dir',default=os.environ.get('AIAP_DATA_DIR','./data'));sp=ap.add_subparsers(dest='command',required=True)
     sp.add_parser('init',help='Initialize once without overwriting an existing identity.')
     sv=sp.add_parser('serve');sv.add_argument('--host',default='127.0.0.1');sv.add_argument('--port',type=int,default=8042);sv.add_argument('--archive-interval',type=int,default=3600)
     g=sp.add_parser('grant');g.add_argument('--spaces',nargs='+',required=True);g.add_argument('--purpose',required=True);g.add_argument('--runtime',required=True);g.add_argument('--role',choices=['adapter','owner'],default='adapter');g.add_argument('--days',type=int,default=7);g.add_argument('--output',required=True)
@@ -136,6 +136,7 @@ def main():
     context.add_argument('--credential-file', required=True)
     context.add_argument('--space', required=True)
     context.add_argument('--preference-condition')
+    context.add_argument('--preference-after')
     context.add_argument('--skip-preferences', action='store_true')
     _add_recall_options(context)
     context.add_argument('--limit', type=int, default=20)
@@ -220,8 +221,22 @@ def main():
     recall = sp.add_parser('recall-preferences', help='Read confirmed defaults for an exact condition and credential runtime.')
     for option in ('credential-file', 'space', 'condition'):
         recall.add_argument('--' + option, required=True)
+    recall.add_argument('--after')
+    recall.add_argument('--limit', type=int, default=100)
     baseline = sp.add_parser('preview-preference-baseline', help='Review the unsigned registry across every space as Owner.')
     baseline.add_argument('--credential-file', required=True)
+    baseline.add_argument('--expected-sha256', help='Reject the review if the baseline digest has changed.')
+    for command in ('mirror-preview', 'mirror-refresh', 'mirror-show', 'mirror-review-sources', 'mirror-clear'):
+        mirror = sp.add_parser(command, help='Manage an Owner-only local reflection.')
+        mirror.add_argument('--credential-file', required=True)
+        mirror.add_argument('--space', required=True)
+        if command in ('mirror-preview', 'mirror-refresh'):
+            mirror.add_argument('--model', required=True, help='Local model for selected events from JSON stdin.')
+            mirror.add_argument('--port', type=int, default=1234)
+            mirror.add_argument('--local-address', default='127.0.0.1', help='Numeric address assigned to this machine.')
+    activation = sp.add_parser('activate-preference-baseline', help='Sign a reviewed local preference baseline as Owner.')
+    activation.add_argument('--credential-file', required=True)
+    activation.add_argument('--expected-sha256', required=True)
     pref_manifest = sp.add_parser('preference-manifest', help='Read a preference digest and its local Core signature status as Owner.')
     pref_manifest.add_argument('--credential-file', required=True)
     pref_manifest.add_argument('--space', required=True)
@@ -229,7 +244,14 @@ def main():
     pref_list.add_argument('--credential-file', required=True)
     pref_list.add_argument('--space', required=True)
     pref_list.add_argument('--after', default='')
+    pref_list.add_argument('--needs-review', action='store_true', help='Show confirmed preferences with revised or unavailable evidence.')
     pref_list.add_argument('--limit', type=int, default=20)
+    pref_history = sp.add_parser('preference-history', help='Read earlier versions of one preference as Owner.')
+    pref_history.add_argument('--credential-file', required=True)
+    pref_history.add_argument('--space', required=True)
+    pref_history.add_argument('--preference-id', required=True)
+    pref_history.add_argument('--limit', type=int, default=20)
+    pref_history.add_argument('--check-evidence', action='store_true')
     withdraw = sp.add_parser('withdraw-preference')
     for option in ('credential-file', 'space', 'preference-id'):
         withdraw.add_argument('--' + option, required=True)
@@ -386,7 +408,7 @@ def main():
         return
     local=getattr(args,'local',False)
     local_commands = ('list-memories', 'preflight-candidate', 'pending', *procedural_commands, 'capture-session', 'capture-owner-observation', 'context', 'context-ack', 'confirm-use',
-                      'summary', 'project-space', 'set-validity', 'compare-local-checkpoint', 'preference-candidates', 'review-preference-evidence', 'preview-preference', 'confirm-preference', 'withdraw-preference', 'recall-preferences', 'list-preferences', 'preference-manifest', 'preview-preference-baseline', 'history', 'grants', 'grant-reissue', 'audit',
+                      'summary', 'project-space', 'set-validity', 'compare-local-checkpoint', 'preference-candidates', 'review-preference-evidence', 'preview-preference', 'confirm-preference', 'withdraw-preference', 'recall-preferences', 'list-preferences', 'preference-history', 'preference-manifest', 'preview-preference-baseline', 'activate-preference-baseline', 'mirror-preview', 'mirror-refresh', 'mirror-show', 'mirror-review-sources', 'mirror-clear', 'history', 'grants', 'grant-reissue', 'audit',
                       'compact-core', 'compact-manifest', 'profile-summary',
                       'profile-summary-select', 'profile-summary-clear', *_LIFECYCLE_COMMANDS)
     s=Service(args.data_dir,enable_semantic=not local and args.command not in local_commands)
@@ -504,6 +526,8 @@ def main():
         request = _search_request(args, s.session(token))
         if args.preference_condition is not None:
             request['preference_condition'] = args.preference_condition
+        if args.preference_after is not None:
+            request['preference_after'] = args.preference_after
         request['skip_preferences'] = args.skip_preferences
         result = s.search(token, {**request, 'limit': args.limit}, context=True)
     elif args.command == 'context-ack':
@@ -553,13 +577,33 @@ def main():
         else:
             result = s.preview_preference(token, args.space, **fields)
     elif args.command == 'preview-preference-baseline':
-        result = s.preview_preference_baseline(_read_grant_token(args.credential_file))
+        result = s.preview_preference_baseline(_read_grant_token(args.credential_file), expected_sha256=args.expected_sha256)
+    elif args.command in ('mirror-show', 'mirror-review-sources', 'mirror-clear'):
+        from .mirror import saved
+        result = saved(s, _read_grant_token(args.credential_file), args.space, clear=args.command == 'mirror-clear',
+                       review_sources=args.command == 'mirror-review-sources')
+    elif args.command in ('mirror-preview', 'mirror-refresh'):
+        from .mirror import render, local_generator
+        raw = sys.stdin.buffer.read(32769)
+        require(len(raw) <= 32768, 'E_MIRROR_INPUT_SIZE')
+        try:
+            events = json.loads(raw)
+        except (ValueError, RecursionError):
+            raise Fault('E_SCHEMA') from None
+        result = render(s, _read_grant_token(args.credential_file), args.space, events,
+                        local_generator(args.model, args.port, args.local_address), save=args.command == 'mirror-refresh')
+    elif args.command == 'activate-preference-baseline':
+        result = s.activate_preference_baseline(_read_grant_token(args.credential_file), args.expected_sha256)
     elif args.command == 'preference-manifest':
         result = s.preference_manifest(_read_grant_token(args.credential_file), args.space)
+    elif args.command == 'preference-history':
+        result = s.preference_history(_read_grant_token(args.credential_file), args.space, args.preference_id, limit=args.limit,
+                                      check_evidence=args.check_evidence)
     elif args.command == 'list-preferences':
-        result = s.list_preferences(_read_grant_token(args.credential_file), args.space, after=args.after, limit=args.limit)
+        result = s.list_preferences(_read_grant_token(args.credential_file), args.space, after=args.after,
+                                    limit=args.limit, needs_review=args.needs_review)
     elif args.command == 'recall-preferences':
-        result = s.recall_preferences(_read_grant_token(args.credential_file), args.space, args.condition)
+        result = s.recall_preferences(_read_grant_token(args.credential_file), args.space, args.condition, limit=args.limit, after=args.after)
     elif args.command == 'withdraw-preference':
         result = s.withdraw_preference(_read_grant_token(args.credential_file), args.space, args.preference_id)
     elif args.command == 'history':

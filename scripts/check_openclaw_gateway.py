@@ -122,7 +122,6 @@ def main():
         require(len(candidates) == 1, 'invalid release layout')
         payload = candidates[0].parent
         manifest = json.loads(candidates[0].read_text())
-        report['core_version'] = manifest['core_version']
         report['plugin_version'] = manifest['plugin_version']
         for line in (payload / 'SHA256SUMS').read_text().splitlines():
             digest, name = line.split('  ', 1)
@@ -146,6 +145,13 @@ def main():
         core.initialize()
         owner_token = json.loads((current / 'core/owner-credentials.json').read_text())['token']
         credential = core.issue_grant(['space:general'], 'lavida-memory', 'openclaw-main')
+        pref_fields = dict(statement='Review two checks', condition='Production changes',
+                           exception='Local experiment', runtimes=['openclaw-main'])
+        pref_ids = set()
+        for statement in ('Review two checks', 'Record the rollback plan'):
+            fields = {**pref_fields, 'statement': statement}
+            pin = core.preview_preference(owner_token, 'space:general', **fields)['preview_sha256']
+            pref_ids.add(core.confirm_preference(owner_token, 'space:general', pin, **fields)['preference_id'])
         credential_path = current / 'host/adapter.json'
         credential_path.write_text(json.dumps(credential))
         credential_path.chmod(0o600)
@@ -210,6 +216,10 @@ def main():
                         str(current / 'core'), 'serve', '--port', str(core_port), '--archive-interval', '0'],
                         env=clean_env, stdout=core_log, stderr=subprocess.STDOUT)
                     ready(core_process, core_base, '/health')
+                    health_status, health = http(core_base, '/health')
+                    require(health_status == 200 and health.get('version') == manifest['core_version'],
+                            'running Core version differs from release manifest')
+                    report['core_version'] = health['version']
                     gateway_process = subprocess.Popen([node, str(entry), 'gateway', 'run',
                         '--port', str(gateway_port), '--bind', 'loopback'], env=environment(current),
                         stdout=gateway_log, stderr=subprocess.STDOUT)
@@ -229,6 +239,19 @@ def main():
                     status = invoke('status', {})
                     require(status['avatar_id'] == credential['avatar_id'] and status['space_ref'] == 'space:general', 'wrong identity/scope')
                     require(status['automatic_proposals']['enabled'] is False, 'automatic proposals enabled')
+                    available = invoke('status', {'preference_conditions_after': ''})['preference_conditions']
+                    require(available == {'conditions':['Production changes'], 'next_after':None}, 'wrong condition catalog')
+                    search = {'query':'', 'preference_condition':available['conditions'][0], 'limit':1}
+                    first = invoke('search', search)
+                    last = invoke('search', {**search, 'preference_after':first['next_preference_after']})
+                    defaults = first['preference_defaults'] + last['preference_defaults']
+                    require(first['possibly_more_preferences'] and not last['possibly_more_preferences']
+                            and 'next_preference_after' not in last and len(defaults) == 2
+                            and {item['preference_id'] for item in defaults} == pref_ids
+                            and all(item['exception'] == 'Local experiment' for item in defaults),
+                            'incomplete preference traversal')
+                    require('preference_defaults' not in invoke('search', {'query':''}), 'turn override failed')
+                    checks[phase + '_scoped_preference_tools'] = True
                     invoke('status', {}, token='invalid-synthetic-token', expected=401)
                     invoke('search', {'query': ''}, session='agent:main:unbound', expected=404)
                     checks[phase + '_gateway_auth_and_session'] = True

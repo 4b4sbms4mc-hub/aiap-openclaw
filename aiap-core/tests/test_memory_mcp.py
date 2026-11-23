@@ -167,6 +167,56 @@ class MemoryAdmissionTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ToolError):
             await self.call('aiap_memory_search', query='')
 
+    async def test_context_pages_preferences_and_rechecks_withdrawals(self):
+        space = 'space:general'
+        keys = []
+        for statement in ('Check the plan', 'Read the changelog', 'Review the risks'):
+            fields = dict(statement=statement, condition='Release', runtimes=['fixture'])
+            pin = self.core.preview_preference(self.owner, space, **fields)['preview_sha256']
+            keys.append(self.core.confirm_preference(self.owner, space, pin, **fields)['preference_id'])
+        keys.sort()
+        async def page(**fields):
+            return await self.call('aiap_memory_context', query='', limit=1, **fields)
+        first = await page(preference_condition='Release')
+        self.assertEqual(first['preference_defaults'][0]['preference_id'], keys[0])
+        cursor = first['next_preference_after']
+        self.core.withdraw_preference(self.owner, space, keys[1])
+        last = await page(preference_condition='Release', preference_after=cursor)
+        self.assertEqual(last['preference_defaults'][0]['preference_id'], keys[2])
+        self.assertFalse(last['possibly_more_preferences'])
+        self.assertNotIn('next_preference_after', last)
+        with self.assertRaises(ToolError):
+            await page(preference_condition='Another', preference_after=cursor)
+        with self.assertRaises(ToolError):
+            await page(preference_after=cursor)
+        self.assertNotIn('preference_defaults', await page())
+
+    async def test_context_applies_only_confirmed_matching_runtime_preferences(self):
+        space = 'space:general'
+        fields = dict(statement='Review the release plan', condition='Release', exception='Local experiment',
+                      runtimes=['fixture', 'openclaw-work'])
+        pin = self.core.preview_preference(self.owner, space, **fields)['preview_sha256']
+        async def context(**args):
+            return await self.call('aiap_memory_context', query='', **args)
+        self.assertEqual((await context(preference_condition='Release'))['preference_defaults'], [])
+        record = self.core.confirm_preference(self.owner, space, pin, **fields)
+        private = {**fields, 'statement': 'Another runtime only', 'runtimes': ['other']}
+        other = self.core.preview_preference(self.owner, space, **private)
+        self.core.confirm_preference(self.owner, space, other['preview_sha256'], **private)
+        self.assertNotIn('preference_conditions', await self.call('aiap_memory_status'))
+        discovery = await self.call('aiap_memory_status', preference_conditions_after='')
+        self.assertEqual(discovery['preference_conditions'], {'conditions': ['Release'], 'next_after': None})
+        page = await context(preference_condition=' Release ')
+        item, = page['preference_defaults']
+        self.assertEqual(item['preference_id'], record['preference_id'])
+        self.assertEqual(item['exception'], 'Local experiment')
+        self.assertNotIn('evidence_refs', item)
+        self.assertEqual(page['items'], [])
+        self.assertNotIn('preference_defaults', await context())
+        self.assertEqual((await context(preference_condition='Other'))['preference_defaults'], [])
+        self.core.withdraw_preference(self.owner, space, record['preference_id'])
+        self.assertEqual((await context(preference_condition='Release'))['preference_defaults'], [])
+
     async def test_report_adoption_is_bound_to_delivered_version(self):
         draft = await self.call('aiap_memory_propose', text='Orchard planted')
         self.core.decide(self.owner, draft['delta_id'], True)
@@ -393,6 +443,26 @@ class InstalledLocalMCPTests(unittest.IsolatedAsyncioTestCase):
                     page = await call(session, 'aiap_memory_list', {'level': 'M1'})
                     self.assertEqual([r['excerpt'] for r in page['results']], [query])
                     self.assertEqual([(r['content'], r['level']) for r in results], [(query, 'M1')])
+
+                    service = Service(data)
+                    owner = json.loads((data / 'owner-credentials.json').read_text())['token']
+                    ids = []
+                    for statement in ('Review the plan', 'Check the schedule', 'Prepare rollback'):
+                        fields = dict(statement=statement, condition='Release', runtimes=['deepseek-harness'])
+                        pin = service.preview_preference(owner, 'space:general', **fields)['preview_sha256']
+                        saved = service.confirm_preference(owner, 'space:general', pin, **fields)
+                        ids.append(saved['preference_id'])
+                    recall = [*core_cli, 'recall-preferences', '--credential-file', str(credential),
+                              '--space', 'space:general', '--condition', 'Release', '--limit', '1']
+                    first = json.loads(subprocess.check_output(recall, timeout=15))
+                    middle = await call(session, 'aiap_memory_context',
+                                        {'query': '', 'limit': 1, 'preference_condition': 'Release',
+                                         'preference_after': first['next_after']})
+                    last = json.loads(subprocess.check_output(
+                        [*recall, '--after', middle['next_preference_after']], timeout=15))
+                    records = first['preferences'] + middle['preference_defaults'] + last['preferences']
+                    self.assertEqual([r['preference_id'] for r in records], sorted(ids))
+                    self.assertNotIn('next_after', last)
 
     @unittest.skipUnless(os.name == 'nt', 'Windows ACLs')
     def test_windows_rejects_credential_with_public_acl(self):

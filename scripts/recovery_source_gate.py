@@ -20,7 +20,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat
 
 
 def governance(db):
-    meta = {row[0]: strict_json(row[1]) for row in db.execute('SELECT key,value FROM meta')}
+    meta = {row[0]: strict_json(row[1]) for row in db.execute("SELECT key,value FROM meta WHERE key IN ('avatar','revocation_epoch')")}
     return {'core': strict_json(db.execute('SELECT body FROM cores WHERE avatar=?',
                                           (meta['avatar'],)).fetchone()[0]),
             'spaces': [dict(row) for row in db.execute('SELECT * FROM spaces ORDER BY id')],

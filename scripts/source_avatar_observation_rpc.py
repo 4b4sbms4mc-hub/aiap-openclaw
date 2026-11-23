@@ -6,7 +6,8 @@ never request data. This adapter is not an authentication or authorization layer
 """
 from pathlib import Path
 
-from recovery_guard import Fault, canonical, strict_json, require, load_checkpoint, digest
+from recovery_guard import Fault, canonical, strict_json, require, digest
+from aiap_core.recovery_checkpoint import load_checkpoint_index
 from recovery_avatar_observation import observe_source, verify_observation
 from recovery_witness import hex_digest
 
@@ -41,7 +42,7 @@ class LaboratoryAvatarObservationRPC:
             require(path is not None,'E_SOURCE_RPC_CHECKPOINT')
             observation=self.observer(self.source,path,data['checkpoint_sha256'],data['nonce'],self.clock)
             now=self.clock()
-            payload,_=load_checkpoint(path,data['checkpoint_sha256'],now)
+            payload,_,_=load_checkpoint_index(path,data['checkpoint_sha256'],now)
             verify_observation(observation,data['nonce'],data['checkpoint_sha256'],payload,
                                digest(payload['enrollment']),now)
             result=canonical({'profile':PROFILE,'status':'observed','observation':observation})
@@ -60,7 +61,7 @@ def verify_reply(raw,request_raw,checkpoint,clock):
     require(isinstance(reply,dict) and set(reply)=={'profile','status','observation'}
             and reply['profile']==PROFILE and reply['status']=='observed','E_SOURCE_RPC_RESPONSE')
     now=clock()
-    payload,_=load_checkpoint(checkpoint,data['checkpoint_sha256'],now)
+    payload,_,_=load_checkpoint_index(checkpoint,data['checkpoint_sha256'],now)
     verify_observation(reply['observation'],data['nonce'],data['checkpoint_sha256'],payload,
                        digest(payload['enrollment']),now)
     return reply['observation']

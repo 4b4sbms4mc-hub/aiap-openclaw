@@ -53,7 +53,7 @@ def restore_isolated(registry, checkpoint, snapshot, snapshot_sha256, target, ob
             # Recheck the backup after staging, before requesting the final short-lived proof.
             _verify_backup(snapshot, snapshot_sha256)
             with registry._verified_source(checkpoint, observe, expected=before,
-                                           reserve_head=True) as final:
+                                           reserve_head=True, index_only=True) as final:
                 yield {
                     'backup_sha256': snapshot_sha256,
                     'governance_sha256': final['head']['governance_sha256'],

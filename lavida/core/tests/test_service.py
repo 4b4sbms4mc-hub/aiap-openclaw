@@ -4,7 +4,7 @@ from datetime import datetime,timezone,timedelta
 from aiap_core.service import Service
 from aiap_core.client import Client,proposal
 from aiap_core.server import Server
-from aiap_core.contracts import Fault,validate,canonical
+from aiap_core.contracts import Fault,validate,canonical,digest
 
 class ServiceTests(unittest.TestCase):
     def setUp(self):
@@ -20,6 +20,161 @@ class ServiceTests(unittest.TestCase):
     def fault(self,code,call):
         with self.assertRaises(Fault) as cm:call()
         self.assertEqual(cm.exception.code,code)
+    def test_mirror_owner_selection_is_versioned_and_isolated(self):
+        from aiap_core.mirror import render
+        space = 'space:work'
+        one = self.add('Release preflight', level='M1')
+        two = self.add('Preflight for rollout', level='M1')
+        ev = [[{'memory_id': mid, 'revision': 1}] for mid in [one, two]]
+        traits = [dict(statement='Checks before rollout', support=[1, 2], counterexamples=[])]
+        calls = []
+        def generate(events):
+            calls.append(events)
+            return traits
+        before = self.s.db.read_bytes()
+        self.fault('E_DENIED', lambda: render(self.s, self.work, space, ev, generate))
+        self.assertEqual(render(self.s, self.owner, space, ev[:1], generate)['traits'], [])
+        self.fault('E_NOT_FOUND', lambda: render(self.s, self.owner, 'space:life', ev, generate))
+        self.assertEqual(calls, [])
+        result = render(self.s, self.owner, space, ev, generate)
+        self.assertEqual(result['traits'], traits)
+        weak = {'statement': 'Only once', 'support': [1], 'counterexamples': []}
+        self.assertEqual(render(self.s, self.owner, space, ev, lambda _: [weak])['traits'], [])
+        self.fault('E_VERSION_CONFLICT', lambda: render(self.s, self.owner, space,
+                   [[{'memory_id': one, 'revision': 9}]], generate))
+        self.assertNotIn(one, json.dumps(calls))
+        self.assertEqual(result['events'][1]['observations'][0]['memory_id'], two)
+        self.fault('E_MIRROR_OUTPUT', lambda: render(self.s, self.owner, space, ev,
+                   lambda _: [dict(statement='No second event', support=[1, 1], counterexamples=[])]))
+        self.assertEqual(before, self.s.db.read_bytes())
+        ephemeral = self.s.issue_grant([space], 'mirror', 'owner', role='owner')
+        def revoke(events):
+            self.s.revoke_grant(ephemeral['grant_id'])
+            return traits
+        self.fault('E_IDENTITY', lambda: render(self.s, ephemeral['token'], space, ev, revoke))
+
+    def test_saved_mirror_is_private_and_does_not_change_runtime_inputs(self):
+        from aiap_core.mirror import render, saved
+        from aiap_core.procedural import list_descriptors
+        space = 'space:work'
+        ids = [self.add(text, level='M1') for text in ('First review', 'Second review')]
+        ev = [[dict(memory_id=mid, revision=1)] for mid in ids]
+        def runtime_inputs():
+            query = dict(space_refs=[space], purpose='work-task', query='review')
+            context = self.s.search(self.work, query, context=True)
+            # Request and view IDs change on every delivery.
+            view = context['authorized_view']
+            del view['view_id'], view['request_ref']
+            proposal = self.s.preflight_candidate(self.work, dict(space_ref=space, purpose='work-task',
+                text='Propose an independent observation', level='M1', memory_type='fact', trigger='user-request'))
+            return (context, self.s.search(self.work, query), proposal,
+                    list_descriptors(self.s, 'workflow', self.owner, space))
+        prior = runtime_inputs()
+        def refresh(statement):
+            return render(self.s, self.owner, space, ev, lambda _: [
+                dict(statement=statement, support=[1, 2], counterexamples=[])], save=True)
+        self.assertEqual(saved(self.s, self.owner, space)['status'], 'empty')
+        for statement in ('Private description', 'Updated description'):
+            before = self.s.db.read_bytes()
+            refreshed = refresh(statement)
+            self.assertEqual(self.s.db.read_bytes(), before)
+            self.assertEqual(saved(self.s, self.owner, space)['traits'], refreshed['traits'])
+            self.assertEqual(saved(self.s, self.owner, 'space:life')['status'], 'empty')
+            self.assertEqual(runtime_inputs(), prior)
+        self.fault('E_DENIED', lambda: saved(self.s, self.work, space))
+        self.fault('E_DENIED', lambda: saved(self.s, self.work, space, clear=True))
+        saved(self.s, self.owner, space, clear=True)
+        self.assertEqual(saved(self.s, self.owner, space)['status'], 'empty')
+        self.assertEqual(runtime_inputs(), prior)
+        refresh('Latest')
+        self.s.set_memory_validity(self.owner, space, ids[0], 1, expires_at=self.now.isoformat())
+        self.assertEqual(saved(self.s, self.owner, space), {'space_ref': space, 'status': 'stale'})
+
+    @unittest.skipUnless(hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'geteuid'),
+                         'local procedural descriptors require POSIX file checks')
+    def test_mirror_event_exceptions_are_owner_only_and_leave_workflow_steps_intact(self):
+        from aiap_core.mirror import render, saved
+        from aiap_core.procedural import save_descriptor, resolve_workflow
+        space = 'space:work'
+        source = Path(self.tmp.name) / 'descriptor.json'
+        cap = 'aiap:capability:preflight'
+        workflow = 'aiap:workflow:release'
+        source.write_text(json.dumps(dict(schema_version='0.1', capability_id=cap, name='Preflight',
+            semantic_namespace='release.check', description='Check release inputs', version='1', status='active')))
+        save_descriptor(self.s, 'capability', self.owner, space, source, 0)
+        source.write_text(json.dumps(dict(schema_version='0.1', workflow_id=workflow,
+            owner_avatar_id=self.s.session(self.owner)['avatar_id'], name='Release', intent='Deploy change',
+            steps=[dict(step_id='review', capability_id=cap, parameters={'environment': 'production'})],
+            origin='user_defined', status='validated', version='1')))
+        save_descriptor(self.s, 'workflow', self.owner, space, source, 0)
+        def resolve():
+            return resolve_workflow(self.s, self.owner, space, workflow, 'test-work')
+        before = resolve()
+        refs = []
+        for content, event in [('Reviewed release A', 'a'), ('Retelling A', 'a'), ('Reviewed release B', 'b'),
+                               ('Skipped review for the draft', 'c')]:
+            draft = self.draft(content, level='M1')
+            change = draft['delta']['changes'][0]
+            ref = 'event:' + event
+            change['candidate']['source']['source_ref'] = ref
+            change['evidence'] = [{'source_ref': ref}]
+            draft['bindings'][0]['source_refs'] = [ref]
+            self.s.decide(self.owner, self.s.propose(self.work, draft)['delta_id'], True)
+            refs.append(dict(memory_id=change['candidate']['memory_id'], revision=1))
+        ev = [refs[:2], refs[2:3], refs[3:]]
+        self.fault('E_MIRROR_EVENT_OVERLAP', lambda: render(self.s, self.owner, space, [[r] for r in refs],
+                   lambda _: self.fail('overlapping events sent to generator')))
+        for statement in ('Checks releases; experiments with drafts', 'Reviews production changes first'):
+            result = render(self.s, self.owner, space, ev, lambda _: [
+                dict(statement=statement, support=[1, 2], counterexamples=[3])], save=True)
+            self.assertEqual(len(result['events'][0]['observations']), 2)
+            self.assertEqual(saved(self.s, self.owner, space)['traits'][0]['counterexamples'], [3])
+            self.assertEqual(resolve(), before)
+        saved(self.s, self.owner, space, clear=True)
+        self.assertEqual(resolve(), before)
+
+    def test_mirror_review_reports_only_previously_selected_versions(self):
+        from aiap_core.mirror import render, saved
+        space = 'space:work'
+        ids = [self.add(text, level='M1') for text in ('First private observation', 'Second private observation',
+                                                        'Third private observation')]
+        refs = [dict(memory_id=mid, revision=1) for mid in ids]
+        render(self.s, self.owner, space, [refs[:2], refs[2:]], lambda _: [
+            dict(statement='Private portrait', support=[1, 2], counterexamples=[])], save=True)
+        def review():
+            return saved(self.s, self.owner, space, review_sources=True)
+        self.assertEqual(review()['status'], 'current')
+        old = self.s.memory_for_update(self.work, space, ids[1], 1)
+        draft = self.s.propose(self.work, self.draft('Revised private observation', old=old))
+        self.s.decide(self.owner, draft['delta_id'], True)
+        self.s.set_memory_validity(self.owner, space, ids[2], 1, expires_at=self.now.isoformat())
+        extra = self.add('Unselected observation', level='M1')
+        before = self.s.db.read_bytes()
+        result = review()
+        self.assertEqual(result['status'], 'stale')
+        self.assertEqual(result['events'], [
+            {'event': 1, 'observations': [
+                dict(memory_id=ids[0], selected_revision=1, current_revision=1, state='current'),
+                dict(memory_id=ids[1], selected_revision=1, current_revision=2, state='revised')]},
+            {'event': 2, 'observations': [
+                dict(memory_id=ids[2], selected_revision=1, current_revision=None, state='unavailable')]}])
+        self.assertNotIn(extra, json.dumps(result))
+        self.assertNotIn('private', json.dumps(result).lower())
+        self.assertEqual(self.s.db.read_bytes(), before)
+        self.fault('E_DENIED', lambda: saved(self.s, self.work, space, review_sources=True))
+        saved(self.s, self.owner, space, clear=True)
+        self.assertEqual(review(), {'status': 'empty', 'space_ref': space})
+
+    def test_mirror_clear_during_generation_prevents_late_save(self):
+        from aiap_core.mirror import render, saved
+        space = 'space:work'
+        ev = [[dict(memory_id=self.add(text, level='M1'), revision=1)] for text in ('First', 'Second')]
+        def generate(_):
+            saved(self.s, self.owner, space, clear=True)
+            return []
+        self.fault('E_VERSION_CONFLICT', lambda: render(self.s, self.owner, space, ev, generate, save=True))
+        self.assertEqual(saved(self.s, self.owner, space)['status'], 'empty')
+
     def test_preference_evidence_groups_retellings_and_preserves_exceptions(self):
         tokens = [self.work, self.s.issue_grant(['space:work'], 'work-task', 'second-runtime')['token']]
         ids = []
@@ -115,6 +270,10 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual({entry['source_ref'] for entry in saved['evidence_refs']}, set(refs.values()))
         rendered = self.s.recall_preferences(self.work, space, 'Release')['preferences'][0]
         self.assertNotIn('event_groups', rendered)
+        regrouped = preview(replaces=saved['preference_id'])
+        self.assertEqual(regrouped['replacement_review']['changes'],
+                         {'event_groups': {'before': saved['event_groups'], 'after': None}})
+        self.assertNotIn('evidence_changes', regrouped['replacement_review'])
 
     def test_owner_preference_preview_is_scoped_and_read_only(self):
         observation = self.add('Dry run before releases', level='M1')
@@ -163,20 +322,36 @@ class ServiceTests(unittest.TestCase):
         space = 'space:work'
         other = self.s.issue_grant([space], 'work-task', 'second')['token']
         denied = self.s.issue_grant([space], 'work-task', 'unlisted')['token']
-        evidence = self.add('A single release', level='M1')
+        evidence = self.add('Preflight ran before the production change', level='M1')
+        retelling = self.add('The same deployment passed its preflight', token=other, level='M1')
         fields = dict(statement='Run a preflight', condition='Release', exception='Reversible local experiment',
                       runtimes=['test-work', 'second'], supporting=[evidence])
-        pin = self.s.preview_preference(self.owner, space, **fields)['preview_sha256']
+        fields['supporting'].append(retelling)
+        observed = self.s.review_preference_evidence(self.owner, space, [evidence, retelling])
+        self.assertEqual(observed['source_count'], 2)
+        fields['same_event'] = [[group['source_ref'] for group in observed['sources']]]
+        preview = self.s.preview_preference(self.owner, space, **fields)
+        self.assertEqual(preview['event_group_count'], 1)
+        pin = preview['preview_sha256']
         def confirm(token, **edits):
             return self.s.confirm_preference(token, space, pin, **{**fields, **edits})
         def recall(token, condition='Release'):
             return self.s.recall_preferences(token, space, condition)['preferences']
-        self.assertEqual(recall(self.work), [])
+        def context(token, **options):
+            request = dict(space_refs=[space], purpose='work-task', query='', preference_condition='Release')
+            return self.s.search(token, {**request, **options}, context=True)['preference_defaults']
+        self.assertEqual(context(self.work), [])
+        self.assertEqual(context(other), [])
         self.fault('E_DENIED', lambda: confirm(self.work))
         self.fault('E_VERSION_CONFLICT', lambda: confirm(self.owner, statement='Changed'))
         stored = confirm(self.owner)
         self.assertEqual(stored, confirm(self.owner))
-        self.assertEqual(recall(self.work), recall(other))
+        self.assertEqual(context(self.work), context(other))
+        self.assertEqual(context(self.work)[0]['exception'], fields['exception'])
+        self.assertEqual(context(self.work, skip_preferences=True), [])
+        self.assertEqual(context(self.work), context(other))
+        self.assertEqual(context(denied), [])
+        self.fault('E_DENIED', lambda: context(self.life))
         self.assertEqual(recall(self.work)[0]['statement'], fields['statement'])
         self.assertNotIn('evidence_refs', recall(self.work)[0])
         self.assertEqual(recall(denied), [])
@@ -186,10 +361,148 @@ class ServiceTests(unittest.TestCase):
         self.fault('E_DENIED', lambda: self.s.withdraw_preference(self.work, space, key))
         removed = self.s.withdraw_preference(self.owner, space, key)
         self.assertEqual(removed, self.s.withdraw_preference(self.owner, space, key))
-        self.assertEqual(recall(other), [])
+        self.assertEqual(context(self.work), [])
+        self.assertEqual(context(other), [])
         self.fault('E_VERSION_CONFLICT', lambda: confirm(self.owner))
         self.s.set_memory_validity(self.owner, space, evidence, 1, expires_at=self.now.isoformat())
         self.fault('E_NOT_FOUND', lambda: confirm(self.owner))
+
+    def test_preference_history_checks_current_evidence_without_changing_recall(self):
+        space = 'space:work'
+        evidence = self.add('A single release', level='M1')
+        fields = dict(statement='Run preflight', condition='Release', runtimes=['test-work'], supporting=[evidence])
+        pin = self.s.preview_preference(self.owner, space, **fields)['preview_sha256']
+        key = self.s.confirm_preference(self.owner, space, pin, **fields)['preference_id']
+        def evidence_state():
+            page = self.s.preference_history(self.owner, space, key, check_evidence=True)
+            return page['preferences'][0]['evidence_status'][0]
+        self.assertEqual(evidence_state()['state'], 'current')
+        old = self.s.memory_for_update(self.work, space, evidence, 1)
+        delta = self.s.propose(self.work, self.draft('Revised release observation', old=old))
+        self.s.decide(self.owner, delta['delta_id'], True)
+        self.assertEqual(evidence_state(), {'memory_id': evidence, 'confirmed_revision': 1,
+                                           'current_revision': 2, 'state': 'revised'})
+        self.assertEqual(self.s.recall_preferences(self.work, space, 'Release')['preferences'][0]['preference_id'], key)
+        self.s.set_memory_validity(self.owner, space, evidence, 2, expires_at=self.now.isoformat())
+        self.assertEqual(evidence_state()['state'], 'unavailable')
+        self.assertIsNone(evidence_state()['current_revision'])
+
+    def test_owner_review_scan_advances_through_empty_pages(self):
+        space = 'space:work'
+        refs = {}
+        for word in ('first', 'second', 'third'):
+            mid = self.add(word, level='M1')
+            fields = dict(statement=word, condition='release', runtimes=['test-work'],
+                          supporting=[mid], counterexamples=[mid])
+            pin = self.s.preview_preference(self.owner, space, **fields)['preview_sha256']
+            record = self.s.confirm_preference(self.owner, space, pin, **fields)
+            refs[record['preference_id']] = mid
+        first, second, third = sorted(refs)
+        for key in (second, third):
+            self.s.set_memory_validity(self.owner, space, refs[key], 1, expires_at=self.now.isoformat())
+        self.s.withdraw_preference(self.owner, space, third)
+        def scan(after=''):
+            return self.s.list_preferences(self.owner, space, after=after, limit=1, needs_review=True)
+        before = self.s.db.read_bytes()
+        self.assertEqual(scan(), {'preferences': [], 'next_after': first, 'scanned': 1})
+        page = scan(first)
+        self.assertIsNone(page['next_after'])
+        item, = page['preferences']
+        self.assertEqual(item['preference_id'], second)
+        self.assertEqual(item['changed_evidence'], [{'memory_id': refs[second], 'confirmed_revision': 1,
+                                                    'roles': ['supporting', 'counterexample'],
+                                                    'current_revision': None, 'state': 'unavailable'}])
+        self.assertEqual(self.s.list_preferences(self.owner, 'space:life', needs_review=True)['scanned'], 0)
+        self.fault('E_DENIED', lambda: self.s.list_preferences(self.work, space, needs_review=True))
+        self.assertEqual(self.s.db.read_bytes(), before)
+
+    def test_owner_review_surfaces_preference_from_previous_space_policy(self):
+        space = 'space:work'
+        fields = dict(statement='Review releases', condition='Release', runtimes=['test-work'])
+
+        def confirm(**changes):
+            draft = {**fields, **changes}
+            pin = self.s.preview_preference(self.owner, space, **draft)['preview_sha256']
+            return self.s.confirm_preference(self.owner, space, pin, **draft)['preference_id']
+
+        previous = confirm()
+        with self.s.tx() as db:
+            db.execute('UPDATE spaces SET revision=revision+1 WHERE id=?', (space,))
+        before = self.s.db.read_bytes()
+        self.assertEqual(self.s.recall_preferences(self.work, space, 'Release')['preferences'], [])
+        item, = self.s.list_preferences(self.owner, space, needs_review=True)['preferences']
+        self.assertEqual(item['preference_id'], previous)
+        self.assertTrue(item['scope_changed'])
+        self.assertEqual(item['changed_evidence'], [])
+        self.fault('E_DENIED', lambda: self.s.list_preferences(self.work, space, needs_review=True))
+        self.assertEqual(self.s.db.read_bytes(), before)
+        current = confirm(replaces=previous)
+        self.assertEqual(self.s.list_preferences(self.owner, space, needs_review=True)['preferences'], [])
+        item, = self.s.recall_preferences(self.work, space, 'Release')['preferences']
+        self.assertEqual(item['preference_id'], current)
+
+    def test_replacement_preview_compares_evidence_references(self):
+        space = 'space:work'
+        revised, removed, kept, added = [self.add(text, level='M1') for text in
+                                         ('Release practice', 'Old example', 'Steady example', 'New example')]
+        fields = dict(statement='Review release plans', condition='Release', runtimes=['test-work'])
+        original = {**fields, 'supporting': [revised, removed, kept]}
+        pin = self.s.preview_preference(self.owner, space, **original)['preview_sha256']
+        saved = self.s.confirm_preference(self.owner, space, pin, **original)
+        old = self.s.memory_for_update(self.work, space, revised, 1)
+        self.s.decide(self.owner, self.s.propose(self.work, self.draft('Revised practice', old=old))['delta_id'], True)
+        replacement = {**fields, 'supporting': [kept, added], 'counterexamples': [revised],
+                       'replaces': saved['preference_id']}
+        before = self.s.db.read_bytes()
+        preview = self.s.preview_preference(self.owner, space, **replacement)
+        changes = preview.pop('replacement_review')['evidence_changes']
+        self.assertEqual([change['memory_id'] for change in changes], sorted([revised, removed, added]))
+        by_id = {change['memory_id']: change for change in changes}
+        self.assertIsNone(by_id[removed]['after'])
+        self.assertIsNone(by_id[added]['before'])
+        self.assertEqual(by_id[revised]['before']['revision'], 1)
+        self.assertEqual(by_id[revised]['before']['roles'], ['supporting'])
+        self.assertEqual(by_id[revised]['after']['revision'], 2)
+        self.assertEqual(by_id[revised]['after']['roles'], ['counterexample'])
+        self.assertEqual(set(by_id[revised]['after']), {'memory_id', 'revision', 'roles', 'source_ref'})
+        pin = preview.pop('preview_sha256')
+        self.assertEqual(pin, digest(preview))
+        self.assertEqual(self.s.db.read_bytes(), before)
+        confirmed = self.s.confirm_preference(self.owner, space, pin, **replacement)
+        self.assertNotIn('replacement_review', confirmed)
+        self.assertIn(by_id[revised]['after'], confirmed['evidence_refs'])
+
+    def test_rejected_replacement_leaves_confirmed_preference_intact(self):
+        space = 'space:work'
+        evidence = self.add('Release check', level='M1')
+        fields = dict(statement='Review release plans', condition='Release', runtimes=['test-work'])
+        pin = self.s.preview_preference(self.owner, space, **fields)['preview_sha256']
+        original = self.s.confirm_preference(self.owner, space, pin, **fields)
+        replacement = {**fields, 'replaces': original['preference_id'], 'supporting': [evidence]}
+        grant = self.s.issue_grant([space], 'review', 'fixture-owner', role='owner')
+        stale = self.s.preview_preference(grant['token'], space, **replacement)['preview_sha256']
+
+        old = self.s.memory_for_update(self.work, space, evidence, 1)
+        self.s.decide(self.owner, self.s.propose(self.work, self.draft('Revised release check', old=old))['delta_id'], True)
+        before = self.s.db.read_bytes()
+        self.fault('E_VERSION_CONFLICT', lambda: self.s.confirm_preference(
+            grant['token'], space, stale, **replacement))
+        self.assertEqual(before, self.s.db.read_bytes())
+
+        fresh = self.s.preview_preference(grant['token'], space, **replacement)['preview_sha256']
+        self.s.revoke_grant(grant['grant_id'])
+        before = self.s.db.read_bytes()
+        self.fault('E_IDENTITY', lambda: self.s.confirm_preference(
+            grant['token'], space, fresh, **replacement))
+        self.assertEqual(before, self.s.db.read_bytes())
+        self.assertEqual(self.s.list_preferences(self.owner, space)['preferences'], [original])
+        recalled, = self.s.recall_preferences(self.work, space, 'Release')['preferences']
+        self.assertEqual(recalled['preference_id'], original['preference_id'])
+
+        confirmed = self.s.confirm_preference(self.owner, space, fresh, **replacement)
+        self.assertEqual(confirmed['evidence_refs'][0]['revision'], 2)
+        history = self.s.preference_history(self.owner, space, confirmed['preference_id'])['preferences']
+        self.assertEqual([record['status'] for record in history], ['confirmed', 'superseded'])
 
     def test_preference_replacement_and_turn_override(self):
         space = 'space:work'
@@ -199,8 +512,27 @@ class ServiceTests(unittest.TestCase):
             pin = self.s.preview_preference(self.owner, space, **fields)['preview_sha256']
             return self.s.confirm_preference(self.owner, space, pin, **fields)['preference_id']
         first = confirm()
-        updated = confirm(statement='review preflight', replaces=first)
-        self.assertEqual(confirm(statement='review preflight', replaces=first), updated)
+        replacement = dict(statement='review preflight', condition='production', runtimes=['test-work', 'second'],
+                           replaces=first)
+        before = self.s.db.read_bytes()
+        preview = self.s.preview_preference(self.owner, space, **replacement)
+        self.assertEqual(preview.pop('replacement_review'), {
+            'previous_status': 'confirmed',
+            'changes': {
+                'statement': {'before': 'preflight', 'after': 'review preflight'},
+                'allowed_runtimes': {'before': ['test-work'], 'after': ['second', 'test-work']},
+            },
+        })
+        pin = preview.pop('preview_sha256')
+        self.assertEqual(pin, digest(preview))
+        self.assertEqual(self.s.db.read_bytes(), before)
+        record = self.s.confirm_preference(self.owner, space, pin, **replacement)
+        updated = record['preference_id']
+        self.assertNotIn('replacement_review', record)
+        self.assertEqual(self.s.confirm_preference(self.owner, space, pin, **replacement), record)
+        retried = self.s.preview_preference(self.owner, space, **replacement)
+        self.assertEqual(retried['replacement_review']['previous_status'], 'superseded')
+        self.assertEqual(retried['preview_sha256'], pin)
         self.fault('E_VERSION_CONFLICT', lambda: confirm(statement='stale edit', replaces=first))
         def context(**opts):
             request = dict(space_refs=[space], purpose='work-task', query='', preference_condition='production')
@@ -214,6 +546,16 @@ class ServiceTests(unittest.TestCase):
         records = page['preferences'] + second['preferences']
         self.assertEqual({p['status'] for p in records}, {'superseded', 'confirmed'})
         self.s.withdraw_preference(self.owner, space, updated)
+        before = self.s.db.read_bytes()
+        page = self.s.preference_history(self.owner, space, updated, limit=1)
+        self.assertEqual([p['status'] for p in page['preferences']], ['withdrawn'])
+        self.assertEqual(page['next_preference_id'], first)
+        older = self.s.preference_history(self.owner, space, first)
+        self.assertEqual(older['preferences'][0]['successor'], updated)
+        self.assertIsNone(older['next_preference_id'])
+        self.fault('E_DENIED', lambda: self.s.preference_history(self.work, space, updated))
+        self.fault('E_NOT_FOUND', lambda: self.s.preference_history(self.owner, 'space:life', updated))
+        self.assertEqual(self.s.db.read_bytes(), before)
         self.assertEqual(context(), [])
 
     def test_preference_manifest_tracks_archives_and_isolates_spaces(self):
@@ -267,6 +609,11 @@ class ServiceTests(unittest.TestCase):
         detail = self.s.compact_core(self.owner, space=space, revision=original['revision'])
         self.assertEqual(detail['manifest']['preference_manifest'], ref)
         self.assertEqual(detail['manifest']['entries'], [])
+        replacement = dict(fields, statement='Replacement', replaces=pref['preference_id'])
+        before = self.s.db.read_bytes()
+        review = self.s.preview_preference(self.owner, space, **replacement)
+        self.assertEqual(review['replacement_review']['previous_status'], 'confirmed')
+        self.assertEqual(self.s.db.read_bytes(), before)
         bundle = self.s.compact_core(self.owner)
         compact = bundle['avatar_core']
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -304,9 +651,79 @@ class ServiceTests(unittest.TestCase):
             c.execute("UPDATE meta SET value=json_set(value, '$.statement','Changed') WHERE key=?", (pref['preference_id'],))
         self.fault('E_INTEGRITY', lambda: self.s.recall_preferences(self.work, space, 'Release'))
         self.fault('E_INTEGRITY', lambda: self.s.compact_core(self.owner))
+        self.fault('E_INTEGRITY', lambda: self.s.preview_preference(self.owner, space, **replacement))
         self.fault('E_INTEGRITY', lambda: self.s.list_preferences(self.owner, space))
         self.fault('E_INTEGRITY', lambda: self.s.search(self.work, dict(space_refs=[space], purpose='work-task',
             query='', preference_condition='Release'), context=True))
+
+    def test_new_project_in_signed_index_has_atomic_empty_manifest(self):
+        from unittest.mock import patch
+        core = self.s.core(self.owner)['avatar_core']
+        revision = core['revision']
+        core['extensions'].append({'namespace': 'x-aiap-local-preference-index', 'version': '1', 'critical': True})
+        for space in ('space:general', 'space:work', 'space:life'):
+            manifest = self.s.preference_manifest(self.owner, space)
+            core['state_index'].append(dict(id='preference-manifest:' + space, version=1,
+                                            scope=manifest['scope'], sha256=manifest['sha256']))
+        del core['integrity']
+        self.s._sign_core(core, 'x-aiap-local-ed25519-json-v1', b'AIAP-LOCAL-CORE-v1\x00')
+        with self.s.tx() as c:
+            c.execute('UPDATE cores SET body=?', (canonical(core).decode(),))
+        with patch.object(self.s, '_sign_core', side_effect=OSError()), self.assertRaises(OSError):
+            self.s.create_project_space('demo')
+        self.assertEqual(self.s.core(self.owner)['avatar_core'], core)
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+        ready = Barrier(2)
+        def create():
+            ready.wait(timeout=5)
+            return self.s.create_project_space('demo')
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            attempts = [pool.submit(create) for _ in range(2)]
+            projects = [attempt.result(timeout=10) for attempt in attempts]
+        self.assertCountEqual([project['created'] for project in projects], [True, False])
+        space = 'space:project:demo'
+        self.assertTrue(all(project['space_ref'] == space for project in projects))
+        self.fault('E_DENIED', lambda: self.s.preference_manifest(self.owner, space))
+        token = self.s.issue_grant([space], 'owner-maintenance', 'owner', role='owner')['token']
+        def read():
+            return self.s.preference_manifest(token, space)
+        manifest = read()
+        self.assertTrue(manifest['signed'])
+        self.assertEqual((manifest['core_revision'], manifest['manifest_version'], manifest['record_count']),
+                         (revision + 1, 1, 0))
+        self.assertFalse(self.s.create_project_space('demo')['created'])
+        self.assertEqual(read(), manifest)
+        fields = dict(statement='Check first', condition='Release', runtimes=['test-work'])
+        pin = self.s.preview_preference(token, space, **fields)['preview_sha256']
+        self.s.confirm_preference(token, space, pin, **fields)
+        self.assertEqual(read()['manifest_version'], 2)
+
+    def test_activate_preference_baseline_requires_current_review_and_full_owner(self):
+        from unittest.mock import patch
+        activate = self.s.activate_preference_baseline
+        initial = self.s.preview_preference_baseline(self.owner)
+        pin = initial['baseline_sha256']
+        partial = self.s.issue_grant(['space:work'], 'owner-maintenance', 'owner', role='owner')['token']
+        self.fault('E_DENIED', lambda: activate(partial, pin))
+        self.fault('E_DENIED', lambda: activate(self.work, pin))
+        self.fault('E_SCHEMA', lambda: activate(self.owner, None))
+        fields = dict(statement='Preflight', condition='Release', runtimes=['test-work'])
+        draft = self.s.preview_preference(self.owner, 'space:work', **fields)
+        self.s.confirm_preference(self.owner, 'space:work', draft['preview_sha256'], **fields)
+        self.fault('E_VERSION_CONFLICT', lambda: activate(self.owner, pin))
+        pin = self.s.preview_preference_baseline(self.owner)['baseline_sha256']
+        with patch.object(self.s, '_sign_core', side_effect=OSError()), self.assertRaises(OSError):
+            activate(self.owner, pin)
+        self.assertEqual(self.s.preview_preference_baseline(self.owner)['baseline_sha256'], pin)
+        report = activate(self.owner, pin)
+        self.assertEqual(report['core_revision'], initial['baseline']['core_revision'] + 1)
+        for manifest in initial['baseline']['spaces']:
+            current = self.s.preference_manifest(self.owner, manifest['scope']['space_ref'])
+            self.assertTrue(current['signed'])
+            self.assertEqual(current['manifest_version'], 1)
+        self.fault('E_CRITICAL_EXTENSION', lambda: activate(self.owner, pin))
+        self.assertEqual(self.s.core(self.owner)['avatar_core']['revision'], report['core_revision'])
 
     def test_preference_baseline_binds_core_spaces_and_unsigned_records(self):
         review = self.s.preview_preference_baseline
@@ -315,16 +732,38 @@ class ServiceTests(unittest.TestCase):
         self.fault('E_DENIED', lambda: review(partial))
         first = review(self.owner)
         db = self.s.db.read_bytes()
-        self.assertEqual(review(self.owner), first)
+        self.assertEqual(review(self.owner, expected_sha256=first['baseline_sha256']), first)
+        self.fault('E_SCHEMA', lambda: review(self.owner, expected_sha256='not-a-digest'))
+        self.fault('E_DENIED', lambda: review(partial, expected_sha256=first['baseline_sha256']))
         self.assertEqual(self.s.db.read_bytes(), db)
         fields = dict(statement='Internal example', condition='Release', runtimes=['test-work'])
         space = 'space:work'
         pin = self.s.preview_preference(self.owner, space, **fields)['preview_sha256']
-        self.s.confirm_preference(self.owner, space, pin, **fields)
+        original = self.s.confirm_preference(self.owner, space, pin, **fields)
         second = review(self.owner)
         self.assertNotEqual(second['baseline_sha256'], first['baseline_sha256'])
         self.assertEqual(second['baseline']['core_revision'], first['baseline']['core_revision'])
         self.assertNotIn('Internal example', json.dumps(second))
+        self.assertEqual(second['status_counts_by_space'][space],
+                         {'confirmed': 1, 'superseded': 0, 'withdrawn': 0})
+        self.assertEqual(second['baseline_sha256'], digest(second['baseline']))
+        db = self.s.db.read_bytes()
+        self.fault('E_VERSION_CONFLICT', lambda: review(self.owner, expected_sha256=first['baseline_sha256']))
+        self.assertEqual(review(self.owner, expected_sha256=second['baseline_sha256']), second)
+        self.assertEqual(self.s.db.read_bytes(), db)
+        self.add('Raise the signed Core revision')
+        self.fault('E_VERSION_CONFLICT', lambda: review(self.owner, expected_sha256=second['baseline_sha256']))
+        replacement = dict(fields, statement='Replacement', replaces=original['preference_id'])
+        pin = self.s.preview_preference(self.owner, space, **replacement)['preview_sha256']
+        current = self.s.confirm_preference(self.owner, space, pin, **replacement)
+        self.s.withdraw_preference(self.owner, space, current['preference_id'])
+        reviewed = review(self.owner)
+        self.assertEqual(reviewed['status_counts_by_space'][space],
+                         {'confirmed': 0, 'superseded': 1, 'withdrawn': 1})
+        for manifest in reviewed['baseline']['spaces']:
+            counts = reviewed['status_counts_by_space'][manifest['scope']['space_ref']]
+            self.assertEqual(sum(counts.values()), manifest['record_count'])
+            self.assertNotIn('status_counts', manifest)
         with self.s.tx() as c:
             c.execute("INSERT INTO meta VALUES('preference:orphan','{}')")
         self.fault('E_INTEGRITY', lambda: review(self.owner))
@@ -1156,6 +1595,69 @@ class HTTPTests(ServiceTests):
     def test_http_no_token(self):
         with self.assertRaises(urllib.error.HTTPError) as cm:urllib.request.urlopen(self.base+'/v1/core')
         self.assertEqual(cm.exception.code,401)
+    def test_http_preference_condition_discovery_pages_authorized_labels(self):
+        space = 'space:work'
+        path = '/v1/preferences/conditions'
+        body = dict(space_ref=space, purpose='work-task', after='')
+        def confirm(condition, runtime='test-work', statement='Default'):
+            fields = dict(statement=statement, condition=condition, runtimes=[runtime])
+            pin = self.s.preview_preference(self.owner, space, **fields)['preview_sha256']
+            return self.s.confirm_preference(self.owner, space, pin, **fields)['preference_id']
+        labels = [f'Release {i:02}' for i in range(21)]
+        for label in labels:
+            confirm(label)
+        confirm(labels[0], statement='Second default')
+        confirm('Private label', runtime='other')
+        self.s.withdraw_preference(self.owner, space, confirm('Archived'))
+        before = self.s.db.read_bytes()
+        page = self.client.call(path, body)
+        self.assertEqual(page, {'space_ref': space, 'conditions': labels[:20], 'next_after': labels[19]})
+        self.assertEqual(self.client.call(path, {**body, 'after': page['next_after']}),
+                         {'space_ref': space, 'conditions': labels[20:], 'next_after': None})
+        for edits in ({'purpose':'other'}, {'space_ref':'space:life'}):
+            with self.assertRaisesRegex(RuntimeError, 'E_DENIED'):
+                self.client.call(path, {**body, **edits})
+        self.assertEqual(self.s.db.read_bytes(), before)
+        self.s.revoke_grant(self.s.session(self.work)['auth_evidence_ref'])
+        with self.assertRaisesRegex(RuntimeError, 'E_IDENTITY'):
+            self.client.call(path, body)
+
+    def test_http_preference_pages_are_grant_bound(self):
+        space = 'space:work'
+        for text in ['First', 'Second']:
+            fields = dict(statement=text, condition='Release', runtimes=['test-work'])
+            pin = self.s.preview_preference(self.owner, space, **fields)['preview_sha256']
+            self.s.confirm_preference(self.owner, space, pin, **fields)
+        path = '/v1/preferences/recall'
+        req = dict(space_ref=space, purpose='work-task', condition='Release', limit=1)
+        cursor = self.client.call(path, req)['next_after']
+        another = self.s.issue_grant([space], 'work-task', 'test-work')
+        with self.assertRaisesRegex(RuntimeError, 'E_CURSOR'):
+            Client(self.base, another['token']).call(path, {**req, 'after':cursor})
+        view = dict(space_refs=[space], purpose='work-task', query='', limit=1,
+                    preference_condition='Release', preference_after=cursor, skip_preferences=True)
+        skipped = self.client.call('/v1/context', view)
+        self.assertEqual(skipped['preference_defaults'], [])
+        self.assertNotIn('next_preference_after', skipped)
+        self.s.revoke_grant(self.s.session(self.work)['auth_evidence_ref'])
+        with self.assertRaisesRegex(RuntimeError, 'E_IDENTITY'):
+            self.client.call(path, {**req, 'after':cursor})
+
+    def test_http_preference_recall_binds_scope_purpose_and_live_grant(self):
+        path = '/v1/preferences/recall'
+        body = dict(space_ref='space:work', purpose='work-task', condition='Release', limit=1)
+        before = self.s.db.read_bytes()
+        self.assertEqual(self.client.call(path, body), {'space_ref': 'space:work', 'preferences': [], 'possibly_more': False})
+        for edits, error in [({'space_ref':'space:life'}, 'E_DENIED'), ({'purpose':'other'}, 'E_DENIED'),
+                             ({'purpose':None}, 'E_SCHEMA'), ({'limit':True}, 'E_SCHEMA'),
+                             ({'runtime':'other'}, 'E_SCHEMA')]:
+            with self.subTest(edits=edits), self.assertRaisesRegex(RuntimeError, error):
+                self.client.call(path, {**body, **edits})
+        self.assertEqual(self.s.db.read_bytes(), before)
+        self.s.revoke_grant(self.s.session(self.work)['auth_evidence_ref'])
+        with self.assertRaisesRegex(RuntimeError, 'E_IDENTITY'):
+            self.client.call(path, body)
+
     def test_http_duplicate_json_rejected(self):
         req=urllib.request.Request(self.base+'/v1/search',data=b'{"query":"a","query":"b"}',headers={'Authorization':'Bearer '+self.work,'Content-Type':'application/json'})
         with self.assertRaises(urllib.error.HTTPError) as cm:urllib.request.urlopen(req)

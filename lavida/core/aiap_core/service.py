@@ -175,8 +175,19 @@ class Service:
             if row:
                 require(row['kind'] == 'project', 'E_SCOPE', 409)
                 return {'space_ref': space, 'created': False}
+            core, enrollment = self._load_signed_core(connection, avatar)
             connection.execute('INSERT INTO spaces VALUES(?,?,?,?,?)',
                                (avatar, space, 'project', 'policy:project:' + slug, 1))
+            if core['extensions'] != [_BASE_EXTENSION]:
+                refs = self._preference_references(core)
+                subject = {'avatar': avatar, 'subject': core['owner']['owner_ref']}
+                require(space not in refs, 'E_INTEGRITY', 500)
+                scope = self._scope(connection, subject, space)
+                manifest = self._preference_manifest(connection, avatar, scope)
+                require(manifest['record_count'] == 0, 'E_INTEGRITY', 500)
+                core['state_index'].append({'id': _PREFERENCE_REF_PREFIX + space, 'scope': scope,
+                                            'version': 1, 'sha256': manifest['sha256']})
+                self._save_preference_index(connection, core, enrollment['payload']['avatar_public_key'])
             self._audit(connection, avatar, space, 'project-space-created', space, 'local-operator')
             return {'space_ref': space, 'created': True}
 
@@ -596,6 +607,8 @@ class Service:
                 condition = body.pop('preference_condition')
                 require(isinstance(condition, str) and condition.strip() and len(condition) <= 2000)
                 require(isinstance(body.get('space_refs'), list) and len(body['space_refs']) == 1)
+            after = body.pop('preference_after', None)
+            require(after is None or condition is not None, 'E_CURSOR')
             override = body.pop('skip_preferences', False)
             require(type(override) is bool)
         levels = search_levels(body)
@@ -619,9 +632,11 @@ class Service:
                 if condition is not None:
                     defaults = {'preferences': [], 'possibly_more': False}
                     if not override and 'M2' in levels:
-                        defaults = self._matching_preferences(c, g, scopes[0], condition, limit)
+                        defaults = self._matching_preferences(c, g, scopes[0], condition, limit, token, after)
                     out['preference_defaults'] = defaults['preferences']
                     out['possibly_more_preferences'] = defaults['possibly_more']
+                    if defaults['possibly_more']:
+                        out['next_preference_after'] = defaults['next_after']
                 refs=[{'id':m['memory_id'],'version':m['revision'],'scope':m['scope'],'sha256':digest(m)} for m in result]
                 view={'view_id':uid('view:'),'request_ref':uid('request:'),'avatar_id':g['avatar'],'subject_ref':g['subject'],'session_ref':g['session'],'runtime_ref':g['runtime'],'purpose':g['purpose'],'space_refs':scopes,'objects':refs,'policy_versions':[self._scope(c,g,s)['policy_ref'] for s in scopes],'revocation_epoch':self.meta(c,'revocation_epoch'),'compiled_at':stamp(self.now()),'expires_at':stamp(min(parse(g['expires']),self.now()+timedelta(minutes=5)))}
                 deadlines = [m.get('extensions', {}).get(VALIDITY_EXTENSION, {}).get('expires_at') for m in result]
@@ -1145,7 +1160,33 @@ class Service:
             owner = self._grant(c, token)
             self._allow(owner, [space], 'read', owner=True)
             preview = self._preference_draft(c, owner, space, **fields)
-            return {**preview, 'preview_sha256': digest(preview)}
+            self._verify_preference_space(c, owner['avatar'], preview['scope'])
+            result = {**preview, 'preview_sha256': digest(preview)}
+            if preview.get('replaces'):
+                previous = self._owner_preference(c, owner, space, preview['replaces'])
+                fields_to_compare = ('statement', 'condition', 'exception', 'project_rule',
+                                     'allowed_runtimes', 'scope', 'event_groups')
+                result['replacement_review'] = {
+                    'previous_status': previous['status'],
+                    'changes': {field: {'before': previous.get(field), 'after': preview.get(field)}
+                                for field in fields_to_compare if previous.get(field) != preview.get(field)},
+                }
+                before = {ref['memory_id']: ref for ref in previous['evidence_refs']}
+                after = {ref['memory_id']: ref for ref in self._preference_evidence_refs(preview['evidence'])}
+                evidence_changes = [
+                    {'memory_id': memory_id, 'before': before.get(memory_id), 'after': after.get(memory_id)}
+                    for memory_id in sorted(before.keys() | after.keys())
+                    if before.get(memory_id) != after.get(memory_id)
+                ]
+                if evidence_changes:
+                    result['replacement_review']['evidence_changes'] = evidence_changes
+            return result
+
+    @staticmethod
+    def _preference_evidence_refs(evidence):
+        return [{'memory_id': item['memory_id'], 'revision': item['revision'],
+                 'roles': item['roles'], 'source_ref': group['source_ref']}
+                for group in evidence['sources'] for item in group['observations']]
 
     def confirm_preference(self, token, space, preview_sha256, **fields):
         with self.tx() as c:
@@ -1167,9 +1208,7 @@ class Service:
                 c.execute('UPDATE meta SET value=? WHERE key=?', (encode(old), old['preference_id']))
                 self._audit(c, owner['avatar'], space, 'preference-superseded', old['preference_id'], owner['id'])
             # Keep references and roles for provenance, without duplicating observation text.
-            references = [{'memory_id': item['memory_id'], 'revision': item['revision'],
-                           'roles': item['roles'], 'source_ref': group['source_ref']}
-                          for group in draft.pop('evidence')['sources'] for item in group['observations']]
+            references = self._preference_evidence_refs(draft.pop('evidence'))
             record = {**draft, 'status': 'confirmed', 'level': 'M2', 'preference_id': key, 'confirmed_at': stamp(self.now()),
                       'evidence_refs': references}
             c.execute('INSERT INTO meta VALUES(?,?)', (key, encode(record)))
@@ -1177,32 +1216,69 @@ class Service:
             self._audit(c, owner['avatar'], space, 'preference-confirmed', key, owner['id'])
             return record
 
-    def recall_preferences(self, token, space, condition):
+    def recall_preferences(self, token, space, condition, *, purpose=None, limit=100, after=None):
         require(isinstance(condition, str) and condition.strip() and len(condition) <= 2000)
+        require(type(limit) is int and 1 <= limit <= 100)
         with self.tx(read_only=True) as c:
             grant = self._grant(c, token)
-            self._allow(grant, [space], 'read')
-            return self._matching_preferences(c, grant, space, condition, 100)
+            self._allow(grant, [space], 'read', purpose=purpose)
+            return self._matching_preferences(c, grant, space, condition, limit, token, after)
 
-    def _matching_preferences(self, c, grant, space, condition, limit):
+    def preference_conditions(self, token, body):
+        """List distinct confirmed condition labels visible to this runtime."""
+        exact(body, ('space_ref', 'purpose', 'after'))
+        space, purpose, after = (body[key] for key in ('space_ref', 'purpose', 'after'))
+        require(isinstance(purpose, str) and purpose and isinstance(after, str) and len(after) <= 2000)
+        with self.tx(read_only=True) as c:
+            grant = self._grant(c, token)
+            self._allow(grant, [space], 'read', purpose=purpose)
+            scope = self._scope(c, grant, space)
+            self._verify_preference_space(c, grant['avatar'], scope)
+            rows = c.execute("""
+                SELECT DISTINCT json_extract(value, '$.condition') AS label
+                FROM meta WHERE key GLOB 'preference:*'
+                AND json_extract(value, '$.avatar_id')=? AND json_extract(value, '$.space_ref')=?
+                AND json_extract(value, '$.scope')=? AND json_extract(value, '$.status')='confirmed'
+                AND EXISTS (SELECT 1 FROM json_each(meta.value, '$.allowed_runtimes') WHERE value=?)
+                AND json_extract(value, '$.condition') > ? ORDER BY label LIMIT 21
+            """, (grant['avatar'], space, encode(scope), grant['runtime'], after))
+            labels = [row[0] for row in rows]
+            return {'space_ref': space, 'conditions': labels[:20],
+                    'next_after': labels[19] if len(labels) > 20 else None}
+
+    def _matching_preferences(self, c, grant, space, condition, limit, token, after):
         scope = self._scope(c, grant, space)
         self._verify_preference_space(c, grant['avatar'], scope)
+        def cursor_tag(key):
+            binding = ['preference-recall-v1', grant['avatar'], grant['id'], grant['runtime'],
+                       grant['purpose'], scope, condition.strip(), key]
+            return hmac.digest(token.encode(), canonical(binding), 'sha256').hex()
+
+        start = ''
+        if after is not None:
+            require(isinstance(after, str) and len(after) <= 160, 'E_CURSOR')
+            tag, _, start = after.partition('.')
+            require(re.fullmatch('[0-9a-f]{64}', tag) and re.fullmatch('preference:[0-9a-f]{64}', start)
+                    and hmac.compare_digest(tag, cursor_tag(start)), 'E_CURSOR')
         rows = c.execute("""
-            SELECT value FROM meta WHERE key GLOB 'preference:*'
+            SELECT value FROM meta WHERE key GLOB 'preference:*' AND key>?
             AND json_extract(value, '$.avatar_id')=? AND json_extract(value, '$.space_ref')=?
-            AND json_extract(value, '$.scope.policy_ref.version')=?
-            AND json_extract(value, '$.scope.policy_ref.id')=?
+            AND json_extract(value, '$.scope')=?
             AND json_extract(value, '$.status')='confirmed' AND json_extract(value, '$.condition')=?
             AND EXISTS (SELECT 1 FROM json_each(meta.value, '$.allowed_runtimes') WHERE value=?)
             ORDER BY key LIMIT ?
-        """, (grant['avatar'], space, scope['policy_ref']['version'], scope['policy_ref']['id'], condition.strip(), grant['runtime'], limit + 1))
+        """, (start, grant['avatar'], space, encode(scope), condition.strip(), grant['runtime'], limit + 1))
         fields = ('preference_id', 'statement', 'condition', 'exception', 'confirmed_at')
         items = []
         for row in rows:
             record = json.loads(row['value'])
             if record['scope'] == scope:
                 items.append({field: record[field] for field in fields})
-        return {'space_ref': space, 'preferences': items[:limit], 'possibly_more': len(items) > limit}
+        page = {'space_ref': space, 'preferences': items[:limit], 'possibly_more': len(items) > limit}
+        if page['possibly_more']:
+            key = items[limit - 1]['preference_id']
+            page['next_after'] = cursor_tag(key) + '.' + key
+        return page
 
     def withdraw_preference(self, token, space, preference_id):
         with self.tx() as c:
@@ -1225,20 +1301,51 @@ class Service:
         require(record['avatar_id'] == owner['avatar'] and record['space_ref'] == space, 'E_NOT_FOUND', 404)
         return record
 
-    def preview_preference_baseline(self, token):
-        """Describe exactly which legacy registry state would be enrolled."""
+    def preview_preference_baseline(self, token, *, expected_sha256=None):
+        """Describe the legacy registry state and optionally check a reviewed digest."""
+        require(expected_sha256 is None or (
+            isinstance(expected_sha256, str) and re.fullmatch(r'[0-9a-f]{64}', expected_sha256)))
         with self.tx(read_only=True) as c:
             owner, spaces, core, _ = self._owner_core(c, token)
-            require(core['extensions'] == [_BASE_EXTENSION], 'E_CRITICAL_EXTENSION', 409)
-            require(not any(ref['id'].startswith(_PREFERENCE_REF_PREFIX) for ref in core['state_index']),
-                    'E_VERSION_CONFLICT', 409)
-            manifests = [self._preference_manifest(c, owner['avatar'], self._scope(c, owner, sid))
-                         for sid in spaces]
-            stored = c.execute("SELECT count(*) FROM meta WHERE key GLOB 'preference:*'").fetchone()[0]
-            require(stored == sum(m['record_count'] for m in manifests), 'E_INTEGRITY', 500)
-            baseline = {'profile': 'x-aiap-preference-baseline-review-v1', 'avatar_id': owner['avatar'],
-                        'core_revision': core['revision'], 'signed_core_sha256': digest(core), 'spaces': manifests}
-            return {'status': 'preview', 'baseline': baseline, 'baseline_sha256': digest(baseline)}
+            return self._preference_baseline(c, owner, spaces, core, expected_sha256)
+
+    def activate_preference_baseline(self, token, expected_sha256):
+        """Enroll the reviewed local registry in the signed Core index once."""
+        require(isinstance(expected_sha256, str) and re.fullmatch(r'[0-9a-f]{64}', expected_sha256))
+        with self.tx() as c:
+            owner, spaces, core, enrollment = self._owner_core(c, token)
+            self._allow(owner, spaces, 'admin', owner=True)
+            review = self._preference_baseline(c, owner, spaces, core, expected_sha256)
+            core['extensions'].append(_PREFERENCE_EXTENSION)
+            for manifest in review['baseline']['spaces']:
+                scope = manifest['scope']
+                core['state_index'].append({'id': _PREFERENCE_REF_PREFIX + scope['space_ref'],
+                                            'version': 1, 'sha256': manifest['sha256'], 'scope': scope})
+            self._save_preference_index(c, core, enrollment['payload']['avatar_public_key'])
+            self._audit(c, owner['avatar'], None, 'preference-baseline-activated', expected_sha256, owner['id'])
+            return {'status': 'activated', 'baseline_sha256': expected_sha256,
+                    'core_revision': core['revision'], 'space_count': len(spaces)}
+
+    def _preference_baseline(self, c, owner, spaces, core, expected_sha256):
+        require(core['extensions'] == [_BASE_EXTENSION], 'E_CRITICAL_EXTENSION', 409)
+        require(not any(ref['id'].startswith(_PREFERENCE_REF_PREFIX) for ref in core['state_index']),
+                'E_VERSION_CONFLICT', 409)
+        manifests = []
+        status_counts = {}
+        for sid in spaces:
+            scope = self._scope(c, owner, sid)
+            manifest = self._preference_manifest(c, owner['avatar'], scope, include_status_counts=True)
+            status_counts[sid] = manifest.pop('status_counts')
+            manifests.append(manifest)
+        stored = c.execute("SELECT count(*) FROM meta WHERE key GLOB 'preference:*'").fetchone()[0]
+        require(stored == sum(m['record_count'] for m in manifests), 'E_INTEGRITY', 500)
+        baseline = {'profile': 'x-aiap-preference-baseline-review-v1', 'avatar_id': owner['avatar'],
+                    'core_revision': core['revision'], 'signed_core_sha256': digest(core), 'spaces': manifests}
+        baseline_sha256 = digest(baseline)
+        if expected_sha256 is not None:
+            require(hmac.compare_digest(baseline_sha256, expected_sha256), 'E_VERSION_CONFLICT', 409)
+        return {'status': 'preview', 'baseline': baseline, 'baseline_sha256': baseline_sha256,
+                'status_counts_by_space': status_counts}
 
     def preference_manifest(self, token, space):
         """Compute a scoped digest and verify its commitment when the index declares one."""
@@ -1263,6 +1370,9 @@ class Service:
         core, ref, public_key = update
         manifest = self._preference_manifest(c, core['avatar_id'], ref['scope'])
         ref.update(version=ref['version'] + 1, sha256=manifest['sha256'])
+        self._save_preference_index(c, core, public_key)
+
+    def _save_preference_index(self, c, core, public_key):
         del core['integrity']
         core.update(previous_revision=core['revision'], revision=core['revision'] + 1, updated_at=stamp(self.now()))
         self._sign_core(core, 'x-aiap-local-ed25519-json-v1', b'AIAP-LOCAL-CORE-v1\x00',
@@ -1303,37 +1413,109 @@ class Service:
         require(ref['sha256'] == manifest['sha256'], 'E_INTEGRITY', 500)
         return {**manifest, 'signed': True, 'core_revision': core['revision'], 'manifest_version': ref['version']}
 
-    def _preference_manifest(self, c, avatar, scope):
+    def _preference_manifest(self, c, avatar, scope, *, include_status_counts=False):
         profile = 'x-aiap-local-preference-manifest-v1'
         header = {'profile': profile, 'avatar_id': avatar, 'scope': scope}
         hasher = hashlib.sha256(canonical(header) + b'\n')
         rows = c.execute("""SELECT key, value FROM meta WHERE key GLOB 'preference:*'
             AND json_extract(value, '$.avatar_id')=? AND json_extract(value, '$.space_ref')=?
             ORDER BY key""", (avatar, scope['space_ref']))
-        count = 0
+        status_counts = dict.fromkeys(('confirmed', 'superseded', 'withdrawn'), 0)
         for row in rows:
             record = json.loads(row['value'])
-            require(record.get('preference_id') == row['key']
-                    and record.get('status') in ('confirmed', 'superseded', 'withdrawn'),
+            status = record.get('status')
+            require(record.get('preference_id') == row['key'] and isinstance(status, str) and status in status_counts,
                     'E_INTEGRITY', 500)
             entry = {'id': row['key'], 'sha256': digest(record)}
             hasher.update(canonical(entry) + b'\n')
-            count += 1
-        return {**header, 'record_count': count, 'sha256': hasher.hexdigest(), 'signed': False}
+            status_counts[status] += 1
+        manifest = {**header, 'record_count': sum(status_counts.values()), 'sha256': hasher.hexdigest(), 'signed': False}
+        if include_status_counts:
+            manifest['status_counts'] = status_counts
+        return manifest
 
-    def list_preferences(self, token, space, *, after='', limit=20):
-        require(isinstance(after, str) and (after == '' or re.fullmatch(r'preference:[0-9a-f]{64}', after)))
+    def preference_history(self, token, space, preference_id, *, limit=20, check_evidence=False):
+        """Read a bounded chain from the selected revision towards its predecessors."""
         require(type(limit) is int and 1 <= limit <= 100)
+        require(type(check_evidence) is bool)
         with self.tx(read_only=True) as c:
             owner = self._grant(c, token)
             self._allow(owner, [space], 'read', owner=True)
-            self._verify_preference_space(c, owner['avatar'], self._scope(c, owner, space))
+            scope = self._scope(c, owner, space)
+            self._verify_preference_space(c, owner['avatar'], scope)
+            now = self.now()
+            records = []
+            seen = set()
+            record = self._owner_preference(c, owner, space, preference_id)
+            while True:
+                require(record['preference_id'] == preference_id and preference_id not in seen,
+                        'E_INTEGRITY', 500)
+                if len(records) == limit:
+                    return {'preferences': records, 'next_preference_id': preference_id}
+                seen.add(preference_id)
+                if check_evidence:
+                    record['evidence_status'] = self._m1_evidence_status(c, owner, space, scope, record['evidence_refs'], now)
+                records.append(record)
+                preference_id = record.get('replaces')
+                if preference_id is None:
+                    return {'preferences': records, 'next_preference_id': None}
+                predecessor = self._owner_preference(c, owner, space, preference_id)
+                require(predecessor.get('successor') == record['preference_id']
+                        and predecessor['status'] == 'superseded', 'E_INTEGRITY', 500)
+                record = predecessor
+
+    def _m1_evidence_status(self, c, owner, space, scope, refs, now):
+        if not refs:
+            return []
+        slots = ','.join('?' for _ in refs)
+        rows = c.execute(f'SELECT id, body FROM memories WHERE avatar=? AND space=? AND id IN ({slots})',
+                         (owner['avatar'], space, *(ref['memory_id'] for ref in refs)))
+        versions = {}
+        for row in rows:
+            memory = json.loads(row['body'])
+            if (memory['scope'] == scope and memory['level'] == 'M1'
+                    and self._memory_validity(memory, now) == 'current'):
+                versions[row['id']] = memory['revision']
+        statuses = []
+        for ref in refs:
+            revision = versions.get(ref['memory_id'])
+            state = 'unavailable' if revision is None else 'current' if revision == ref['revision'] else 'revised'
+            statuses.append({'memory_id': ref['memory_id'], 'confirmed_revision': ref['revision'],
+                             'current_revision': revision, 'state': state})
+        return statuses
+
+    def list_preferences(self, token, space, *, after='', limit=20, needs_review=False):
+        require(isinstance(after, str) and (after == '' or re.fullmatch(r'preference:[0-9a-f]{64}', after)))
+        require(type(limit) is int and 1 <= limit <= 100)
+        require(type(needs_review) is bool)
+        with self.tx(read_only=True) as c:
+            owner = self._grant(c, token)
+            self._allow(owner, [space], 'read', owner=True)
+            scope = self._scope(c, owner, space)
+            self._verify_preference_space(c, owner['avatar'], scope)
             rows = c.execute("""SELECT value FROM meta WHERE key GLOB 'preference:*' AND key>?
                 AND json_extract(value, '$.avatar_id')=? AND json_extract(value, '$.space_ref')=?
-                ORDER BY key LIMIT ?""", (after, owner['avatar'], space, limit + 1))
+                AND (? = 0 OR json_extract(value, '$.status') = 'confirmed')
+                ORDER BY key LIMIT ?""", (after, owner['avatar'], space, needs_review, limit + 1))
             records = [json.loads(row[0]) for row in rows]
-            return {'preferences': records[:limit],
-                    'next_after': records[limit - 1]['preference_id'] if len(records) > limit else None}
+            next_after = records[limit - 1]['preference_id'] if len(records) > limit else None
+            page = records[:limit]
+            if needs_review:
+                now = self.now()
+                flagged = []
+                for record in page:
+                    scope_changed = record['scope'] != scope
+                    statuses = self._m1_evidence_status(c, owner, space, scope, record['evidence_refs'], now)
+                    changes = [{**item, 'roles': ref['roles']}
+                               for item, ref in zip(statuses, record['evidence_refs']) if item['state'] != 'current']
+                    if scope_changed or changes:
+                        item = {'preference_id': record['preference_id'], 'statement': record['statement'],
+                                'condition': record['condition'], 'changed_evidence': changes}
+                        if scope_changed:
+                            item['scope_changed'] = True
+                        flagged.append(item)
+                return {'preferences': flagged, 'next_after': next_after, 'scanned': len(page)}
+            return {'preferences': page, 'next_after': next_after}
 
     def _preference_draft(self, c, owner, space, *, statement, condition, runtimes, exception=None,
                           project_rule=None, supporting=None, counterexamples=None, replaces=None, same_event=None,
